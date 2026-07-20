@@ -12,7 +12,7 @@ Operator and parameter names in this skill are verified against the official Der
 
 ## When to Load This Skill
 
-Load before building or refining any network whose purpose is visual output: generative art, VJ visuals, shaders, render scenes, projection content, UI visuals, or captured TOP output. Pair it with `capture_top` to evaluate the actual result against the rubric at the end.
+Load before building or refining any network whose purpose is visual output: generative art, VJ visuals, shaders, render scenes, projection content, UI visuals, or captured TOP output. Pair it with `view(top)` (codemode: the frame as an inline image, plus a black/empty-frame health check -- YOU judge the aesthetics against the rubric) -- or `capture_top` in full mode -- to evaluate the actual result against the rubric at the end.
 
 ## Output-first: show the work in the backdrop
 
@@ -23,13 +23,13 @@ As soon as any stage produces pixels, wire the current chain end into `out1`.
 Keep `out1` wired while iterating, including while replacing, inserting, or bypassing intermediate nodes.
 The user should watch progress live behind the network, not wait for a final capture.
 The final deliverable stays terminated in `out1`, matching the existing output terminal convention.
-Use `capture_top` on `out1` for verification passes.
+Use `view(out1)` (codemode; `capture_top` in full mode) on `out1` for verification passes.
 
 ## The Working Loop (mandatory)
 
 1. **Write a 3-line intent brief before creating any operator**: the subject (what the eye lands on first), the mood and palette (name one from Color, or design one), and the motion character (calm drift / pulsing energy / mechanical precision / still). If the user's request doesn't specify, propose a brief and build to it. Never start assembling operators with no target look -- that is how default-looking output happens.
 2. **Build in passes, in this order**: composition + camera blocking -> lighting + value -> color -> motion -> finishing. Get each pass reading correctly before decorating the next. Post cannot rescue a weak composition; color cannot rescue a weak value structure.
-3. **Capture and judge after every pass**: `capture_top` the OUTPUT TOP and actually look at the frame. Judge it against the brief AND the self-check rubric. NEVER declare a visual task done without capturing and assessing the frame -- a clean network is not success; a good-looking, correct frame is.
+3. **Capture and judge after every pass**: `view(out1)` the OUTPUT TOP (codemode: inline image + a black/empty-frame health check; `capture_top` in full mode) and actually look at the frame. Judge it against the brief AND the self-check rubric. NEVER declare a visual task done without capturing and assessing the frame -- a clean network is not success; a good-looking, correct frame is.
 4. **Judge motion over time, not from one still.** For anything animated: (a) let time-evolving systems SETTLE before judging -- feedback and particle systems need dozens-to-hundreds of frames, and an early capture misreads as empty or thin; (b) verify it actually animates: capture, let real seconds pass, capture again -- the frames must differ; (c) judge motion character across 3-5 captures spread over the cycle, including both sides of a loop wrap (the wrap must be invisible); (d) for audio-reactive work, capture at a peak AND at silence -- the silence floor must still look composed; (e) emergent looks (e.g. feedback painting) invert the pass order: build the process, run it, judge the accumulated frame.
 5. **If the captured frame is black or empty**, diagnose before continuing: (a) display/render flags on the output op; (b) for 3D, that a camera, a light, and geometry with render/display on all exist; (c) the chain terminates in a cooking Null; (d) no bypass flag is on; (e) resolution is not 0; (f) alpha/premultiply if the image seems present but invisible.
 6. **Iterate with the smallest knob set**: adjust the fewest upstream controls (see the Fix-It Map at the end), re-capture, re-judge.
@@ -201,7 +201,7 @@ Most of these lean dark-field because emissive light is TD's home turf -- but do
 
 ## Objective Self-Check Rubric
 
-Use `capture_top` to grab the render, then answer these before calling it done:
+Use `view(top)` (codemode: inline image + a black/empty-frame health check; `capture_top` in full mode) to grab the render, then answer these before calling it done:
 
 | Check | Pass condition |
 |---|---|

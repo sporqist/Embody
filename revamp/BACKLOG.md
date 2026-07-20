@@ -39,6 +39,12 @@ Current as of build v6.0.142 (M1-M5 shipped). Update as items land.
 
 ## OPEN -- accuracy / polish
 
+- **[skills ascii cleanup]** The skills/rules corpus has PRE-EXISTING non-ASCII
+  glyphs (em dashes; one UTF-8 BOM on text_skill_externalize.md; '>=' glyphs in
+  mcp-tools-reference read_tdn rows) that predate the codemode reconciliation.
+  Identical in src+template so test_template_sync passes, but they violate
+  ascii-punctuation.md for shipped templates. Separate cleanup pass.
+
 - **[docs] mcp-tools-reference is stale** -- see #8 above.
 - **[codemode-only gap] tk has no externalize.** In `codemode` tool-surface,
   new COMPs from tk.make are NOT auto-externalized (create_op is hidden), so

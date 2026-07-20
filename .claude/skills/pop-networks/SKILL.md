@@ -160,7 +160,7 @@ Use conversions deliberately because GPU -> CPU readback can stall:
 
 Performance is part of the build:
 
-- Before any particle, feedback, GLSL, instancing, or large POP build, call `get_project_performance(include_hotspots=5)` and record the baseline required by `performance.md`.
+- Before any particle, feedback, GLSL, instancing, or large POP build, record the baseline required by `performance.md`. In `code_mode` read the metrics live (native `op.cpuCookTime` / `op.gpuCookTime`, the Perform CHOP stats); in full mode call `get_project_performance(include_hotspots=5)`.
 - Re-check after each significant step, not only at the end.
 - Watch GPU headroom, frame time, dropped frames, hotspot cook time, and memory. Stop on the `performance.md` thresholds.
 - Start particle and instance counts modestly, then ramp with evidence. Do not default to millions.
@@ -169,7 +169,7 @@ Layout is part of the build:
 
 - POP chains still follow the 200-unit grid and left-to-right signal flow.
 - `glslPOP`, `glslcopyPOP`, and other GLSL operators dock compute/info DATs. Place every docked DAT with the docked-DAT formula from `network-layout.md`.
-- `execute_python` creation drops POPs at `(0, 0)` unless you position them. A `LAYOUT WARNING` is a hard stop: query layout, move the ops, move docked DATs, and verify again.
+- `tk.make` (like full-mode `create_op`) auto-positions each POP and hugs its docked compute/info DATs. Raw creation drops POPs at `(0, 0)` unless you position them -- that is native `parent.create(...)` / `.copy()` inside `code_mode`, or full-mode `execute_python`. A `LAYOUT WARNING` is a hard stop: query layout (`describe(mode='network')`), move the ops, move docked DATs, and verify again.
 - Every logical POP cluster gets an annotation enclosing its operators.
 
 Naming is part of readability:
@@ -179,14 +179,14 @@ Naming is part of readability:
 
 Verification is visual and structural:
 
-- A POP render chain is verified by rendering it. Capture the Render TOP output with `capture_top` and judge the frame using `/visual-aesthetics`.
+- A POP render chain is verified by rendering it. Capture the Render TOP output with `view(target=<render_top>)` (full mode: `capture_top`) and judge the frame using `/visual-aesthetics`.
 - Let simulations settle before judging. Empty early frames can be lifecycle or demand issues, not final appearance.
 - Verify animation over time with multiple captures when the POP chain is time-dependent.
-- Run `get_op_errors` with `recurse=true` after creating or modifying the network. Fix errors and warnings before claiming the build works.
+- Check errors after creating or modifying the network: `code_mode` auto-settles and returns consolidated diagnostics (op errors + warnings + GLSL compile logs), or call `tk.errors(target)` / `tk.settle()`; full mode: `get_op_errors` with `recurse=true`. Fix errors and warnings before claiming the build works.
 
 ## Trap List
 
-- `rectanglePOP` size parameters are `sizeu` and `sizev`, not `sizex` or `sizey`. Setting `sizex`/`sizey` silently does nothing. General rule: verify live parameters with `get_parameter` before trusting type-level help or component names.
+- `rectanglePOP` size parameters are `sizeu` and `sizev`, not `sizex` or `sizey`. Setting `sizex`/`sizey` silently does nothing. General rule: verify live parameters before trusting type-level help or component names -- read them in `code_mode` (`op.par.sizeu.eval()`) or with `describe(mode='node', full=True)`; full mode: `get_parameter`.
 - The default torus inside a new `geometryCOMP` will render if you leave it there. Delete it before building the POP chain -- this is the general geometryCOMP rule; see `/create-operator` -> "Geometry COMP: delete the default torus" for the render-flag detail.
 - No display/render flags on the output `nullPOP` means the render is empty.
 - Points without point primitives do not render.

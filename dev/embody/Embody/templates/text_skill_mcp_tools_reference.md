@@ -12,6 +12,8 @@ Mutating TD-authoring operations are wrapped in TD undo blocks (one batch_operat
 
 Three LLM-ergonomic tools that cover everything the verb catalogue below does, with far less context tax. Call `describe('contract')` once to get the full `tk.*` helper API.
 
+**In the DEFAULT (codemode) surface, ALL the verb-tool tables below are HIDDEN** -- only `code_mode` / `describe` / `view` (plus the bridge meta-tools) are exposed, and they cover every verb. The tables remain as the reference for what those tools do; the verbs themselves become callable again only after `op.Embody.ext.Envoy.SetToolSurface('full')`.
+
 | Tool | Parameters | Description |
 |------|-----------|-------------|
 | `code_mode` | `code`, `settle_frames?` | Execute Python live on TD's main thread with a curated `tk.` toolkit (make/wire/layout/setp/find/externalize/settle/errors/checkpoint/report) over native `td`. After your code runs, TD force-cooks the touched ops and the response carries CONSOLIDATED diagnostics -- op errors + warnings + GLSL shader-compile logs -- so you never poll. Fresh globals each call. `tk.make` auto-externalizes new COMPs per the `Autoexternalize` preference (same as `create_op`). |

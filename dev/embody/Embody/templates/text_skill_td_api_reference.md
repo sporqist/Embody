@@ -6,6 +6,8 @@ description: "MUST READ before writing TD Python via execute_python, set_dat_con
 
 # TouchDesigner Python API Reference
 
+This is the API reference for the Python you run through `code_mode` (and through `execute_python` in full mode) -- both execute exactly this Python on TD's main thread, so everything below applies verbatim. For the curated `tk` toolkit that `code_mode` layers on top of native `td`, read `describe('contract')`.
+
 **Always research TD features on the wiki before writing code.** Assumptions about TD's Python API are frequently wrong.
 
 - **Wiki home**: https://docs.derivative.ca/Main_Page
@@ -379,7 +381,7 @@ Engine COMP / TouchEngine runs a `.tox` in a separate PROCESS to parallelize hea
 
 Commonly importable without installation: `numpy`, `cv2` (OpenCV), `requests`, `yaml` (PyYAML), `cryptography`, `attrs` (only `numpy` and `cv2` are documented as bundled; verify the rest in your build before relying on them). Auto-imported stdlib: `math`, `re`, `sys`, `collections`, `enum`, `inspect`, `traceback`, `warnings`.
 
-**`requests` blocks the frame - see the Threading ladder above.** `execute_python`, parameter expressions, and operator/cook callbacks all run on TD's main thread, so a synchronous `requests.get(...)` (or `urllib`/`socket`, a large file read, `subprocess.run`, or a blocking DB call) freezes the whole UI/cook cycle for the round-trip - on a slow endpoint it can hang TD or exceed the 30s MCP timeout. `requests` has no default timeout; always pass `timeout=(connect, read)` in seconds. To fetch data, use the Web Client DAT (async, never blocks); if you must use `requests`, run it in a Thread Manager worker.
+**`requests` blocks the frame - see the Threading ladder above.** `code_mode` (or `execute_python` in full mode), parameter expressions, and operator/cook callbacks all run on TD's main thread, so a synchronous `requests.get(...)` (or `urllib`/`socket`, a large file read, `subprocess.run`, or a blocking DB call) freezes the whole UI/cook cycle for the round-trip - on a slow endpoint it can hang TD or exceed the 30s MCP timeout. `requests` has no default timeout; always pass `timeout=(connect, read)` in seconds. To fetch data, use the Web Client DAT (async, never blocks); if you must use `requests`, run it in a Thread Manager worker.
 
 ## Explicit Type Conversion
 

@@ -6,6 +6,16 @@ description: "MUST READ before creating, modifying, or querying annotations. Con
 
 # Manage Annotations Workflow
 
+**Tool surface**: In the default code-mode surface, create and modify annotations
+inside `code_mode` with native TD (`ann = parent.create(annotateCOMP, 'name')`,
+then set `ann.par.*` / `ann.nodeX` etc.), and read them in `code_mode` with
+`parent.findChildren(type=annotateCOMP, includeUtility=True)` -- annotations are
+UTILITY ops, so `describe`/`op()`/`.children` do NOT see them -- or the full-mode
+`get_annotations` verb. The `create_annotation` / `set_annotation` / `get_annotations`
+/ `get_enclosed_ops` verbs shown below are the full-mode path
+(`SetToolSurface('full')`). The coordinate model and quirks are identical either
+way.
+
 ## Creating Annotations
 
 ```
@@ -43,9 +53,9 @@ To create an annotation that encloses a group of operators:
 
 ## Querying
 
-- `get_annotations` — list all annotations in a COMP with properties and enclosed operators
-- `get_enclosed_ops` — get operators enclosed by an annotation, or annotations enclosing an operator
-- `set_annotation` — modify text, title, color, opacity, position, or size
+- **code-mode**: list annotations via `parent.findChildren(type=annotateCOMP, includeUtility=True, depth=1)` inside `code_mode` and read each `ann.par.*` -- annotations are UTILITY ops, so `describe(network)` / `.children` SKIP them (exactly what `get_annotations` does internally). **Full mode**: `get_annotations` lists them with properties + enclosed operators
+- `get_enclosed_ops` (full) — get operators enclosed by an annotation, or annotations enclosing an operator. In code-mode, compute enclosure yourself from `nodeX`/`nodeY`/`nodeWidth`/`nodeHeight` (per the Coordinate Model) inside `code_mode`.
+- `set_annotation` (full) — modify text, title, color, opacity, position, or size. In code-mode, set the annotation's `par.*` / `nodeX` / `nodeWidth` etc. directly inside `code_mode`.
 
 ## `annotateCOMP` Quirks
 

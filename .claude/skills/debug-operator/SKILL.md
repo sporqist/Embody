@@ -6,14 +6,14 @@ description: "TRIGGER when operator errors appear or user reports broken behavio
 
 # Debug Operator Workflow
 
-Systematic approach to diagnosing TD operator errors:
+Systematic approach to diagnosing TD operator errors. The default 3-tool code-mode surface covers every diagnostic read below; the `get_*` verb tools are the equivalents under `SetToolSurface('full')`.
 
-1. **Get errors and warnings**: `get_op_errors` with `recurse=true` on the suspected operator and its children
-2. **Inspect the operator**: `get_op` to see type, family, parameters, inputs, outputs, children
-3. **Check connections**: `get_connections` to verify input/output wiring is correct
-4. **Read DAT content**: `get_dat_content` if the operator is a DAT with script errors
-5. **Check parameters**: `get_parameter` on specific parameters that might be misconfigured
-6. **Check performance**: `get_op_performance` if the issue is cook-time related
+1. **Get errors and warnings**: `tk.errors(target)` returns consolidated diagnostics (op errors + warnings + GLSL compile logs) for the suspected operator subtree; every `code_mode` call also auto-settles ~10 frames and returns those same diagnostics after your edit. (Full-mode verb: `get_op_errors` with `recurse=true` on the operator and its children.)
+2. **Inspect the operator**: `describe('node', target)` for a summary-first view of type, family, inputs, outputs, children; add `full=True` to fan out every parameter (sequences collapsed, menu labels shown). (Full-mode verb: `get_op`.)
+3. **Check connections**: `describe('node', target)` shows input/output wiring; `describe('network', target)` shows subtree topology. (Full-mode verbs: `get_connections`, `query_network`.)
+4. **Read DAT content**: `view(dat)` for reduced rows, or `code_mode` (`op('PATH').text`) for the full source, if the operator is a DAT with script errors. (Full-mode verb: `get_dat_content`.)
+5. **Check parameters**: `describe('node', target, full=True)` to see every parameter, or `code_mode` (`op('PATH').par.X.eval()`) for a specific evaluated value that might be misconfigured. (Full-mode verb: `get_parameter`.)
+6. **Check performance**: `code_mode` (`o = op('PATH'); tk.report({'cpu': o.cpuCookTime, 'gpu': o.gpuCookTime, 'cooks': o.totalCooks, 'cookedThisFrame': o.cookedThisFrame})`) if the issue is cook-time related. (Full-mode verb: `get_op_performance`.)
 
 ## Common Error Patterns
 
@@ -22,5 +22,5 @@ Systematic approach to diagnosing TD operator errors:
 - **Parameter out of range**: Check parameter values against valid ranges
 - **Missing operator reference**: An expression or parameter references a non-existent operator
 - **Cook error**: The operator can't process its inputs — check input data types match expectations
-- **Black or empty render**: Use `capture_top` on the intended output TOP, then check display/render flags on the output and upstream ops; missing light or camera (a 3D scene renders black without both); no cooking Null terminating the chain; a bypass flag left on; resolution is 0; alpha is premultiplied/zero so the image is present but invisible; and whether the op is cooking (check `cookedThisFrame` via `get_op_performance`, or force a cook). After each fix, use `capture_top` again to confirm the frame renders correctly.
-- **Stale content after a file change (cooks clean, shows old pixels)**: An op can cook with NO errors and the RIGHT resolution yet still hold STALE content. A Movie File In whose `par.file` changed serves its previous cached texture until it cooks on a real frame advance -- `cook(force=True)` in the same frame is not enough. And when a TOP chain's output looks exactly ONE frame stale, suspect same-pass reload propagation: a reload applied mid-pass may not reach downstream ops until the next real frame, even under forced cooks in dependency order. Verify CONTENT, not cook state -- read pixels back (`numpyArray()` / `capture_top`) at the POINT OF CAPTURE (the chain's output, not the source) and confirm they actually changed across a real frame advance. See rules/td-python.md (Cook Model) and rules/performance.md (Movie Export).
+- **Black or empty render**: Use `view(top)` on the intended output TOP (full-mode verb: `capture_top`), then check display/render flags on the output and upstream ops; missing light or camera (a 3D scene renders black without both); no cooking Null terminating the chain; a bypass flag left on; resolution is 0; alpha is premultiplied/zero so the image is present but invisible; and whether the op is cooking (check `cookedThisFrame` via `code_mode` reading `op('PATH').cookedThisFrame`, or force a cook with `op('PATH').cook(force=True)`). After each fix, use `view(top)` again to confirm the frame renders correctly.
+- **Stale content after a file change (cooks clean, shows old pixels)**: An op can cook with NO errors and the RIGHT resolution yet still hold STALE content. A Movie File In whose `par.file` changed serves its previous cached texture until it cooks on a real frame advance -- `cook(force=True)` in the same frame is not enough. And when a TOP chain's output looks exactly ONE frame stale, suspect same-pass reload propagation: a reload applied mid-pass may not reach downstream ops until the next real frame, even under forced cooks in dependency order. Verify CONTENT, not cook state -- read pixels back (`numpyArray()` in `code_mode`, or `view(top)` / full-mode `capture_top`) at the POINT OF CAPTURE (the chain's output, not the source) and confirm they actually changed across a real frame advance. See rules/td-python.md (Cook Model) and rules/performance.md (Movie Export).

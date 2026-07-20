@@ -6,24 +6,46 @@ description: "MUST READ before calling externalize_op or save_externalization. R
 
 # Externalize Operator Workflow
 
+## Tool surface: codemode vs full
+
+Envoy defaults to the 3-tool **codemode** surface. In codemode, externalize with
+`tk.externalize(op, strategy=None)` inside `code_mode` -- and note that
+`tk.make(...)` (the codemode create) already **auto-externalizes** any new COMP it
+makes, per the Autoexternalize pref, so freshly-created COMPs are often already
+externalized before you reach for `tk.externalize`. The `externalize_op` /
+`save_externalization` **verb tools** below are the same actions under the full
+surface (`op.Embody.ext.Envoy.SetToolSurface('full')`). The strategy/tag knowledge
+is identical either way.
+
 ## Tagging (includes save)
 
-`externalize_op` tags the operator AND writes it to disk in one step (it calls `Update()` internally). No separate save is needed.
+- **Codemode**: `tk.externalize(op, strategy=None)` -- `strategy` is `'tox'` or
+  `'tdn'` for a COMP (omit to use the default); tags the operator AND writes it to
+  disk in one step. Read back status in the same `code_mode` call (e.g.
+  `tk.report(op.Embody.ext.Embody.getExternalizationStatus(op('/path')))` or inspect
+  the file), and let the auto-settle diagnostics confirm no errors.
+- **Full-mode**: `externalize_op` tags the operator AND writes it to disk in one
+  step (it calls `Update()` internally). No separate save is needed.
 
-1. **Tag and externalize**: `externalize_op` on the operator (auto-detects type if omitted)
-2. **Verify**: `get_externalization_status` to confirm dirty state and file path
-3. **Inspect**: Verify file exists in `embody/` via file inspection
+1. **Tag and externalize**: `tk.externalize(op)` (codemode) / `externalize_op` on the operator (auto-detects type if omitted)
+2. **Verify**: `get_externalization_status` (full-mode) / read status via `code_mode` to confirm dirty state and file path
+3. **Inspect**: Verify file exists in `embody/` via file inspection (`view(dat)` reads a `.py`; describe/read the file directly)
 
 ## Re-exporting After Changes
 
-`save_externalization` force re-exports an already-externalized operator. Use it after modifying an operator in TD when you need to update its file on disk.
+Force re-export an already-externalized operator after modifying it in TD when you
+need to update its file on disk.
+
+- **Codemode**: call `tk.externalize(op)` again (idempotent re-export), or trigger
+  Embody's save/update in `code_mode`.
+- **Full-mode**: `save_externalization` force re-exports an already-externalized operator.
 
 ## Creating Python Files for TouchDesigner
 
 When creating Python files (scripts, extensions, test files, callbacks):
-1. Create the textDAT in TouchDesigner first (via MCP `create_op` or in TD UI)
-2. Write the Python code into the DAT (via MCP `set_dat_content`)
-3. Tag the DAT for externalization (`externalize_op`) — Embody writes the `.py` file to disk
+1. Create the textDAT in TouchDesigner first (codemode `tk.make('text', ...)`, full-mode `create_op`, or in TD UI)
+2. Write the Python code into the DAT (codemode `code_mode` with `dat.text = ...`, full-mode `set_dat_content`)
+3. Tag the DAT for externalization (codemode `tk.externalize(op)`, full-mode `externalize_op`) — Embody writes the `.py` file to disk
 
 **NEVER** manually set the `file` and `syncfile` parameters — Embody handles all file path management.
 
@@ -31,15 +53,18 @@ When creating Python files (scripts, extensions, test files, callbacks):
 
 Export any COMP as a self-contained `.tox` with all Embody metadata stripped:
 
-- **Via MCP**: `execute_python` with `op.Embody.ExportPortableTox(target=op('/path/to/comp'), save_path='/output/path.tox')`
+- **Via codemode**: `code_mode` with `op.Embody.ExportPortableTox(target=op('/path/to/comp'), save_path='/output/path.tox')`
+- **Via MCP (full-mode)**: `execute_python` with `op.Embody.ExportPortableTox(target=op('/path/to/comp'), save_path='/output/path.tox')`
 - **Via UI**: Manager UI > Actions popup > "Export portable tox"
 
 The exported `.tox` works in any TD project with no missing file errors.
 
 ## Checking Status
 
-- `get_externalizations` — list all externalized operators with status
-- `get_externalization_status` — get dirty state, build number, timestamp, file path for a specific operator
+- **Codemode**: read status in `code_mode` via `op.Embody.ext.Embody` helpers (e.g. `getExternalizedOps()`, `getExternalizationStatus(op)`) and `tk.report(...)` the result.
+- **Full-mode**:
+  - `get_externalizations` — list all externalized operators with status
+  - `get_externalization_status` — get dirty state, build number, timestamp, file path for a specific operator
 
 ## TDN Export — Palette COMP Handling
 

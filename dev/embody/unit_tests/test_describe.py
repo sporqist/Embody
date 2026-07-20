@@ -65,6 +65,19 @@ class TestDescribe(EmbodyTestCase):
         names = [p['name'] for p in r['customPars']]
         self.assertIn('Speed', names)
 
+    def test_node_menu_shows_label_and_options(self):
+        # A non-default menu par surfaces the friendly label + option list so
+        # the model never guesses a token/index (value stays the token).
+        g = self.sandbox.create(geometryCOMP, 'gmenu')
+        g.par.xord = 'rst'
+        r = self.envoy._describe('node', g.path)
+        xord = next(p for p in r['nonDefaultPars'] if p['name'] == 'xord')
+        self.assertEqual(xord['value'], 'rst')          # token, not an index
+        self.assertIn('menu', xord)
+        self.assertEqual(xord['menu']['label'], 'Rotate Scale Translate')
+        names = [o['name'] for o in xord['menu']['options']]
+        self.assertIn('srt', names)
+
     def test_node_missing_target_errors(self):
         r = self.envoy._describe('node')
         self.assertIn('error', r)
@@ -107,6 +120,12 @@ class TestDescribe(EmbodyTestCase):
         self.assertIn('default', params[0])
         self.assertEqual(r.get('parameterSource'),
                          'live introspection (running build)')
+        # menu params carry name + friendly label pairs
+        menu_par = next((p for p in params if 'menu' in p), None)
+        if menu_par is not None:
+            opt = menu_par['menu'][0]
+            self.assertIn('name', opt)
+            self.assertIn('label', opt)
 
     def test_docs_wiki_fused_when_mirror_present(self):
         r = self.envoy._describe('docs', 'noiseTOP')

@@ -82,6 +82,7 @@ EXPECTED_ENVOY_TOOLS = [
     'set_op_flags',
     'set_op_position',
     'set_parameter',
+    'view',
 ]
 
 # Served bridge-side; present in tools/list even when TD is down.

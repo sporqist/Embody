@@ -853,6 +853,85 @@ class EnvoyMCPServer:
                 'dump': dump,
             })
 
+        @self.mcp.tool()
+        def view(target: str, resolution: int = 480, other: str = None,
+                 channels: str = None, head: int = 8, tail: int = 0,
+                 stats: bool = True, rows: int = 16, cols: list = None,
+                 pin: bool = False):
+            """
+            Read-only "render": SEE an operator's output, cheaply. Closes the
+            feedback loop with code_mode.
+
+            - TOP  -> inline image, downscaled to `resolution` (default 480 on
+              the longest edge; raise it when you need detail). Carries a
+              Quality verdict (black/empty-frame guard).
+            - CHOP -> per-channel stats (min/max/mean/std) + head/tail samples,
+              never a blind dump. Filter with `channels` (name glob).
+            - DAT  -> header + head/tail rows; select columns with `cols`.
+
+            Diff (two axes):
+            - `other` = a second op path -> RELATIONAL diff (op-vs-op): what a
+              chain does to its data. Same family required.
+            - otherwise a CHOP/DAT view auto-diffs vs YOUR last view of the same
+              target (temporal). pin=True stores the current view as a sticky
+              baseline that later views diff against.
+
+            Args:
+                target: op to view (TOP/CHOP/DAT)
+                resolution: TOP longest-edge cap in pixels (default 480)
+                other: second op path for a relational diff
+                channels: CHOP channel-name glob (e.g. "tx*")
+                head/tail: samples (CHOP) or rows (DAT) from the start/end
+                stats: include per-channel stats (CHOP)
+                rows: reserved for DAT row budgeting
+                cols: DAT column indices or header names to keep
+                pin: store this view as the temporal baseline
+
+            Returns: an inline image (TOP) or a reduced-data / diff dict.
+            """
+            sid, _label = _SESSION_CTX.get()
+            result = self._execute_in_td('view', {
+                'target': target, 'resolution': resolution, 'other': other,
+                'channels': channels, 'head': head, 'tail': tail,
+                'stats': stats, 'rows': rows, 'cols': cols, 'pin': pin,
+                'sid': sid,
+            })
+            if not isinstance(result, dict) or 'error' in result:
+                return result
+            # A TOP result carries base64 pixels -> emit an inline image (the
+            # model sees it directly), with a temp-file fallback + verdict line.
+            if result.get('kind') == 'top' and result.get('image_b64'):
+                import base64
+                import os
+                import uuid
+                image_bytes = base64.b64decode(result['image_b64'])
+                fpath = os.path.join(
+                    tempfile.gettempdir(),
+                    f'envoy_view_{uuid.uuid4().hex[:8]}.png')
+                try:
+                    with open(fpath, 'wb') as f:
+                        f.write(image_bytes)
+                except Exception:
+                    fpath = '(temp write failed)'
+                kb = (result.get('size_bytes') or 0) / 1024
+                info = (f"view TOP {result['path']}: "
+                        f"{result.get('original_width')}x"
+                        f"{result.get('original_height')} -> "
+                        f"{result.get('width')}x{result.get('height')} PNG "
+                        f"({kb:.1f} KB)\nSaved to: {fpath}")
+                q = result.get('quality') or {}
+                if q.get('pass'):
+                    info += (f"\nQuality: OK (max_lum={q.get('max_luminance')}, "
+                             f"std={q.get('std_luminance')})")
+                elif q:
+                    info += (f"\nQuality: FAIL {q.get('fail_reasons')} -- the "
+                             f"frame is likely black/empty/transparent.")
+                # Inline when reasonably small; otherwise point at the file.
+                if (result.get('size_bytes') or 0) < 200000:
+                    return [info, self._Image(data=image_bytes, format='png')]
+                return info + "\n(Use Read on the file path to view the image)"
+            return result
+
         # === Introspection & Diagnostics Tools ===
 
         @self.mcp.tool()
@@ -4280,6 +4359,7 @@ class EnvoyExt:
             'execute_python': self._execute_python,
             'code_mode': self._code_mode,
             'describe': self._describe,
+            'view': self._view,
             # DAT content
             'get_dat_content': self._get_dat_content,
             'set_dat_content': self._set_dat_content,
@@ -5154,6 +5234,16 @@ class EnvoyExt:
         envoy_codemode."""
         return mod.envoy_codemode.describe(self, mode, target, depth, dump)
 
+    def _view(self, target: str, resolution: int = 480, other: str = None,
+              channels: str = None, head: int = 8, tail: int = 0,
+              stats: bool = True, rows: int = 16, cols: list = None,
+              pin: bool = False, sid: str = None) -> dict:
+        """Read-only view: TOP image / CHOP-DAT reduced render / diff -- see
+        envoy_codemode."""
+        return mod.envoy_codemode.view(
+            self, target, resolution, other, channels, head, tail, stats,
+            rows, cols, pin, sid)
+
     def _rollbackNewOps(self, pre_paths) -> int:
         """A failed execute_python must not leave a half-built network: destroy
         ops the script created before the exception (documented contract in
@@ -5439,7 +5529,7 @@ class EnvoyExt:
     # omitted so it still prompts. Entries are the tool short-names; the
     # permission strings written are 'mcp__envoy__<name>'.
     READ_ONLY_TOOLS = [
-        'describe',
+        'describe', 'view',
         'get_td_status', 'get_td_info', 'get_td_classes', 'get_td_class_details',
         'get_op', 'get_op_errors', 'get_op_flags', 'get_op_position',
         'get_op_performance', 'get_project_performance', 'get_parameter',

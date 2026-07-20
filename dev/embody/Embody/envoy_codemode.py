@@ -42,9 +42,11 @@ from __future__ import annotations
 
 import io
 import os
+import sys
 import contextlib
 import time
 import traceback
+from collections import OrderedDict
 
 
 # =============================================================================
@@ -728,6 +730,20 @@ def _describeNode(ext, target):
                 entry['expr'] = p.expr
             except Exception:
                 pass
+        # Menu params: surface the friendly label + the valid options inline so
+        # the model never guesses a token or index (value stays the token).
+        try:
+            if p.isMenu:
+                names = list(p.menuNames)
+                labels = list(p.menuLabels)
+                idx = p.menuIndex
+                entry['menu'] = {
+                    'label': labels[idx] if 0 <= idx < len(labels) else None,
+                    'options': [{'name': n, 'label': l}
+                                for n, l in zip(names, labels)],
+                }
+        except Exception:
+            pass
         return entry
 
     custom_pars = []
@@ -926,7 +942,11 @@ def _liveOptypeInfo(ext, optype):
                 pass
             try:
                 if p.isMenu and p.menuNames:
-                    entry['menu'] = list(p.menuNames)
+                    # name token + friendly label per option -- the model reads
+                    # both in one shot, never guessing a token or index.
+                    entry['menu'] = [{'name': n, 'label': l} for n, l
+                                     in zip(list(p.menuNames),
+                                            list(p.menuLabels))]
             except Exception:
                 pass
             pars.append(entry)
@@ -997,3 +1017,281 @@ def _offlineWikiPage(ext, query):
                 'sections': sections}
     except Exception:
         return None
+
+
+# =============================================================================
+# view -- read-only "renders": TOP pixels, CHOP/DAT reduced data, diffs
+# =============================================================================
+#
+# Closes the feedback loop with code_mode: SEE the output (TOP -> inline image)
+# and the DATA (CHOP/DAT -> reduced render), cheaply. Two diff axes (D3):
+#   relational (op-vs-op, PRIMARY) -- what a chain does to its data.
+#   temporal   -- vs this client's last view / a pinned baseline.
+#
+# The handler returns a dict on the MAIN thread; the worker-side `view` tool
+# turns a TOP result's image_b64 into an inline image. CHOP/DAT/diff stay dicts.
+
+_VIEW_SNAP_CAP = 64          # LRU cap on remembered temporal snapshots
+
+
+def view(ext, target, resolution=480, other=None, channels=None,
+         head=8, tail=0, stats=True, rows=16, cols=None, pin=False, sid=None):
+    """Render an operator's output for the model to see.
+
+    TOP -> inline image (downscaled to `resolution`, default 480 longest edge).
+    CHOP -> per-channel stats + head/tail samples (never blind-dump).
+    DAT  -> header + head/tail rows.
+    `other` (a second op path) -> RELATIONAL diff of the two ops' reduced data.
+    Otherwise a CHOP/DAT view auto-diffs vs this client's last view of the same
+    target (temporal); pin=True stores the current view as the baseline.
+    """
+    o = op(target)
+    if o is None:
+        return {'error': f'Operator not found: {target}'}
+
+    if other:
+        return _viewRelational(ext, o, other, resolution, channels,
+                               head, tail, stats, rows, cols)
+
+    fam = o.family
+    if fam == 'TOP':
+        return _viewTop(ext, o, resolution)
+    if fam == 'CHOP':
+        snap = _reduceChop(o, channels, head, tail, stats)
+        result = {'kind': 'chop', 'path': o.path, **snap}
+        _attachTemporal(result, sid, o.path, snap, pin)
+        return result
+    if fam == 'DAT':
+        snap = _reduceDat(o, head, tail, cols)
+        result = {'kind': 'dat', 'path': o.path, **snap}
+        _attachTemporal(result, sid, o.path, snap, pin)
+        return result
+    return {'error': f'view does not support family {fam!r} yet '
+            f'({o.OPType}) -- use TOP, CHOP, or DAT (describe(node) for '
+            f'params, describe(network) for structure).'}
+
+
+# ---- TOP: inline image ------------------------------------------------------
+
+def _viewTop(ext, o, resolution):
+    try:
+        res = int(resolution) if resolution else 480
+    except Exception:
+        res = 480
+    cap = mod.envoy_read.capture_top(ext, o.path, format='png',
+                                     max_resolution=res)
+    if isinstance(cap, dict) and 'error' in cap:
+        return cap
+    return {
+        'kind': 'top',
+        'path': o.path,
+        'image_b64': cap.get('image_b64'),
+        'format': cap.get('format', 'png'),
+        'width': cap.get('width'),
+        'height': cap.get('height'),
+        'original_width': cap.get('original_width'),
+        'original_height': cap.get('original_height'),
+        'size_bytes': cap.get('size_bytes'),
+        'quality': cap.get('quality'),
+    }
+
+
+# ---- CHOP / DAT reduction ---------------------------------------------------
+
+def _round(v):
+    try:
+        return round(float(v), 6)
+    except Exception:
+        return None
+
+
+def _reduceChop(o, channels, head, tail, stats):
+    try:
+        o.cook(force=True)
+    except Exception:
+        pass
+    arr = None
+    try:
+        import numpy as np
+        arr = o.numpyArray()   # (numChans, numSamples)
+    except Exception:
+        arr = None
+    all_chans = list(o.chans())
+    out = []
+    for idx, ch in enumerate(all_chans):
+        if channels and not tdu.match(channels, [ch.name]):
+            continue
+        try:
+            nsamp = len(ch)
+        except Exception:
+            nsamp = o.numSamples
+        entry = {'name': ch.name, 'numSamples': nsamp}
+        row = None
+        try:
+            if arr is not None and idx < arr.shape[0]:
+                row = arr[idx]
+        except Exception:
+            row = None
+        if row is not None and len(row):
+            if stats:
+                entry['stats'] = {
+                    'min': _round(row.min()), 'max': _round(row.max()),
+                    'mean': _round(row.mean()), 'std': _round(row.std()),
+                }
+            n = max(0, int(head))
+            entry['head'] = [_round(v) for v in row[:n]]
+            if tail:
+                entry['tail'] = [_round(v) for v in row[-int(tail):]]
+        else:
+            try:
+                entry['value'] = _round(ch.eval())
+            except Exception:
+                pass
+        out.append(entry)
+    return {
+        'numChannels': len(all_chans),
+        'shownChannels': len(out),
+        'numSamples': o.numSamples,
+        'sampleRate': getattr(o, 'rate', None),
+        'channels': out,
+    }
+
+
+def _reduceDat(o, head, tail, cols):
+    try:
+        o.cook(force=True)
+    except Exception:
+        pass
+    nr, nc = o.numRows, o.numCols
+    col_idx = None
+    if cols:
+        # cols: list of indices or header names.
+        header = [o[0, c].val for c in range(nc)] if nr else []
+        col_idx = []
+        for c in cols:
+            if isinstance(c, int):
+                if 0 <= c < nc:
+                    col_idx.append(c)
+            else:
+                if c in header:
+                    col_idx.append(header.index(c))
+
+    def _row(r):
+        idxs = col_idx if col_idx is not None else range(nc)
+        return [o[r, c].val for c in idxs]
+
+    n_head = min(nr, max(0, int(head)))
+    rows_out = [_row(r) for r in range(n_head)]
+    tail_out = None
+    if tail and nr > n_head:
+        t = min(nr - n_head, int(tail))
+        tail_out = [_row(r) for r in range(nr - t, nr)]
+    result = {
+        'numRows': nr,
+        'numCols': nc,
+        'rows': rows_out,
+        'truncated': nr > n_head,
+    }
+    if tail_out:
+        result['tailRows'] = tail_out
+    if col_idx is not None:
+        result['columns'] = col_idx
+    return result
+
+
+# ---- Relational diff (op vs op) ---------------------------------------------
+
+def _viewRelational(ext, o, other_path, resolution, channels,
+                    head, tail, stats, rows, cols):
+    other = op(other_path)
+    if other is None:
+        return {'error': f'view(other=...): operator not found: {other_path}'}
+    if o.family != other.family:
+        return {'error': f'relational diff needs same-family ops: '
+                f'{o.path} is {o.family}, {other.path} is {other.family}'}
+    fam = o.family
+    if fam == 'CHOP':
+        a = _reduceChop(o, channels, head, tail, stats)
+        b = _reduceChop(other, channels, head, tail, stats)
+        return {'kind': 'diff', 'axis': 'relational', 'family': 'CHOP',
+                'a': o.path, 'b': other.path,
+                'diff': _diffChop(a, b), 'a_view': a, 'b_view': b}
+    if fam == 'DAT':
+        a = _reduceDat(o, head, tail, cols)
+        b = _reduceDat(other, head, tail, cols)
+        return {'kind': 'diff', 'axis': 'relational', 'family': 'DAT',
+                'a': o.path, 'b': other.path,
+                'diff': _diffDat(a, b), 'a_view': a, 'b_view': b}
+    if fam == 'TOP':
+        return {'kind': 'diff', 'axis': 'relational', 'family': 'TOP',
+                'a': o.path, 'b': other.path,
+                'note': 'TOP-vs-TOP pixel diff is a planned enhancement; view '
+                        'each TOP separately for now.'}
+    return {'error': f'relational diff unsupported for family {fam!r}'}
+
+
+def _diffChop(a, b):
+    an = {c['name']: c for c in a.get('channels', [])}
+    bn = {c['name']: c for c in b.get('channels', [])}
+    added = sorted(set(bn) - set(an))
+    removed = sorted(set(an) - set(bn))
+    changed = []
+    for name in sorted(set(an) & set(bn)):
+        sa = (an[name].get('stats') or {}).get('mean')
+        sb = (bn[name].get('stats') or {}).get('mean')
+        if sa is not None and sb is not None and sa != sb:
+            changed.append({'channel': name, 'mean_a': sa, 'mean_b': sb,
+                            'delta': _round(sb - sa)})
+    return {'addedChannels': added, 'removedChannels': removed,
+            'changedMeans': changed,
+            'sampleCount': {'a': a.get('numSamples'), 'b': b.get('numSamples')}}
+
+
+def _diffDat(a, b):
+    return {'rowCount': {'a': a.get('numRows'), 'b': b.get('numRows')},
+            'colCount': {'a': a.get('numCols'), 'b': b.get('numCols')},
+            'rowDelta': (b.get('numRows', 0) - a.get('numRows', 0)),
+            'colDelta': (b.get('numCols', 0) - a.get('numCols', 0))}
+
+
+# ---- Temporal diff (vs this client's last view / pinned baseline) -----------
+
+def _viewSnapStore():
+    store = getattr(sys, '_envoy_view_snapshots', None)
+    if store is None:
+        store = OrderedDict()
+        sys._envoy_view_snapshots = store
+    return store
+
+
+def _attachTemporal(result, sid, path, snap, pin):
+    """Auto-diff a CHOP/DAT view vs this client's last view of the same target,
+    then remember the current one. pin=True stores it as a sticky baseline that
+    later views diff against until re-pinned."""
+    store = _viewSnapStore()
+    who = sid or '_anon'
+    live_key = (who, path, 'last')
+    pin_key = (who, path, 'pin')
+
+    baseline = store.get(pin_key) or store.get(live_key)
+    if baseline is not None:
+        kind = result.get('kind')
+        try:
+            if kind == 'chop':
+                result['temporal_diff'] = _diffChop(baseline, snap)
+            elif kind == 'dat':
+                result['temporal_diff'] = _diffDat(baseline, snap)
+            result['temporal_baseline'] = ('pinned'
+                                           if store.get(pin_key) else 'last_view')
+        except Exception:
+            pass
+
+    # Update the rolling "last" snapshot (LRU), and the pin if requested.
+    store[live_key] = snap
+    store.move_to_end(live_key)
+    if pin:
+        store[pin_key] = snap
+        store.move_to_end(pin_key)
+        result['pinned'] = True
+    while len(store) > _VIEW_SNAP_CAP:
+        store.popitem(last=False)

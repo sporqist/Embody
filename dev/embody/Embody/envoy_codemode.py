@@ -633,7 +633,7 @@ _CONTRACT_HELPERS = ('make', 'wire', 'layout', 'setp', 'find',
                      'settle', 'errors', 'checkpoint', 'report')
 
 
-def describe(ext, mode, target=None, depth=1, dump=False):
+def describe(ext, mode, target=None, depth=1, dump=False, full=False):
     """Read-only text: the knowledge & structure entry point for code_mode.
 
     Required `mode`; `target` is required for every mode except 'contract'.
@@ -650,7 +650,7 @@ def describe(ext, mode, target=None, depth=1, dump=False):
         if mode == 'contract':
             return _describeContract(ext)
         if mode == 'node':
-            return _describeNode(ext, target)
+            return _describeNode(ext, target, full)
         if mode == 'network':
             return _describeNetwork(ext, target, depth, dump)
         if mode == 'docs':
@@ -703,13 +703,34 @@ def _describeContract(ext):
     }
 
 
-def _describeNode(ext, target):
-    """One op in depth: type/family, custom pars (all) + non-default built-in
-    pars, each with live value + default + mode + expression, plus connections
-    and children. The structure counterpart to `view` (which shows data)."""
+def _describeNode(ext, target, full=False):
+    """One op, SUMMARY-FIRST. By default: a synthesized one-line summary +
+    connections + child count -- token-cheap for mapping a big network. Pass
+    full=True to fan out custom + non-default built-in params (each with live
+    value/default/mode/expression), with sequence params collapsed into blocks
+    (op.seq) instead of const0/const1/... The structure counterpart to `view`
+    (which shows data)."""
     o = op(target)
     if o is None:
         return {'error': f'Operator not found: {target}'}
+
+    info = {
+        'mode': 'node',
+        'path': o.path,
+        'name': o.name,
+        'type': o.OPType,
+        'family': o.family,
+        'summary': _nodeSummary(o),
+        'inputs': [i.path if i else None for i in o.inputs],
+        'outputs': [i.path if i else None for i in o.outputs],
+    }
+    if hasattr(o, 'children'):
+        info['childCount'] = len(o.children)
+    if not full:
+        info['hint'] = ('params omitted for brevity -- call describe(node, '
+                        'full=True) to fan out custom + non-default params '
+                        '(sequences collapsed).')
+        return info
 
     def _par_entry(p):
         entry = {'name': p.name, 'label': p.label}
@@ -749,6 +770,14 @@ def _describeNode(ext, target):
     custom_pars = []
     builtin_nondefault = []
     for p in o.pars():
+        if p.name in _NOISE_PAR_NAMES:
+            continue
+        # Sequence-member pars are collapsed into 'sequences' below.
+        try:
+            if p.sequenceBlock is not None:
+                continue
+        except Exception:
+            pass
         try:
             is_custom = bool(p.isCustom)
         except Exception:
@@ -770,25 +799,142 @@ def _describeNode(ext, target):
         if keep:
             builtin_nondefault.append(_par_entry(p))
 
-    info = {
-        'mode': 'node',
-        'path': o.path,
-        'name': o.name,
-        'type': o.OPType,
-        'family': o.family,
-        'customPars': custom_pars,
-        'nonDefaultPars': builtin_nondefault,
-        'inputs': [i.path if i else None for i in o.inputs],
-        'outputs': [i.path if i else None for i in o.outputs],
-    }
+    info['customPars'] = custom_pars
+    info['nonDefaultPars'] = builtin_nondefault
+    seqs = _describeSequences(o)
+    if seqs:
+        info['sequences'] = seqs
     try:
         info['tags'] = sorted(o.tags)
     except Exception:
         pass
     if hasattr(o, 'children'):
         info['children'] = [c.name for c in o.children]
-        info['childCount'] = len(info['children'])
     return info
+
+
+def _describeSequences(o):
+    """Collapse parameter sequences (op.seq) into compact blocks -- each block
+    lists only its non-default params by SHORT name -- instead of fanning out
+    const0value / const1value / ... Trailing empty blocks are dropped."""
+    out = []
+    try:
+        sequences = list(o.seq)
+    except Exception:
+        return out
+    for s in sequences:
+        try:
+            blocks = []
+            for blk in s.blocks:
+                prefix = f'{s.name}{blk.index}'
+                bpars = {}
+                for pg in blk:
+                    for p in pg:
+                        try:
+                            if (p.mode.name == 'CONSTANT'
+                                    and p.val == p.default):
+                                continue
+                            short = (p.name[len(prefix):]
+                                     if p.name.startswith(prefix) else p.name)
+                            bpars[short] = str(p.eval())
+                        except Exception:
+                            pass
+                blocks.append({'index': blk.index, 'pars': bpars})
+            while blocks and not blocks[-1]['pars']:
+                blocks.pop()
+            if blocks:
+                out.append({'sequence': s.name,
+                            'numBlocks': len(s.blocks),
+                            'blocks': blocks})
+        except Exception:
+            pass
+    return out
+
+
+# ---- synthesized one-line op summary (TD exposes none via Python) -----------
+
+# UI-state pars that are never semantically meaningful to the model.
+_NOISE_PAR_NAMES = frozenset({'pageindex'})
+
+
+def _nodeSummary(o):
+    """A compact one-liner capturing an op's essence, so a big network maps
+    cheaply. Hand-tuned for a few common optypes; generic fallback lists the
+    most salient non-default params (skipping the Common/Info pages)."""
+    t = o.OPType
+    fn = _SUMMARIZERS.get(t)
+    if fn:
+        try:
+            s = fn(o)
+            if s:
+                return s
+        except Exception:
+            pass
+    # Generic: up to 3 salient non-default, non-Common built-in params.
+    salient = []
+    for p in o.pars():
+        if len(salient) >= 3:
+            break
+        try:
+            if p.isCustom or p.name in _NOISE_PAR_NAMES:
+                continue
+            if p.sequenceBlock is not None:
+                continue
+            page = p.page.name if p.page else ''
+            if page in ('Common', 'Info', 'About'):
+                continue
+            if p.mode.name == 'CONSTANT':
+                if p.isPulse or p.val == p.default:
+                    continue
+            salient.append(f'{p.name}={p.eval()}')
+        except Exception:
+            pass
+    return f'{t}: ' + ', '.join(salient) if salient else t
+
+
+def _sum_math(o):
+    bits = []
+    try:
+        combo = o.par.chopop.eval()
+        if combo and combo not in ('off',):
+            bits.append(f'combine={combo}')
+    except Exception:
+        pass
+    for name, sym in (('gain', '*'), ('preoff', 'pre+'), ('postoff', '+')):
+        try:
+            p = getattr(o.par, name)
+            if p.val != p.default:
+                bits.append(f'{sym}{p.eval()}')
+        except Exception:
+            pass
+    return 'mathCHOP: ' + (', '.join(bits) if bits else 'passthrough')
+
+
+def _sum_constant_chop(o):
+    try:
+        pairs = []
+        for blk in o.seq.const.blocks:
+            nm = blk.par.name.eval()
+            if nm:
+                pairs.append(f'{nm}={blk.par.value.eval()}')
+        return 'constantCHOP: ' + (', '.join(pairs) if pairs else 'empty')
+    except Exception:
+        return None
+
+
+def _sum_null(o):
+    return f'{o.OPType}: passthrough'
+
+
+# Registry of hand-tuned summarizers by optype.
+_SUMMARIZERS = {
+    'mathCHOP': _sum_math,
+    'constantCHOP': _sum_constant_chop,
+    'nullCHOP': _sum_null,
+    'nullTOP': _sum_null,
+    'nullSOP': _sum_null,
+    'nullDAT': _sum_null,
+}
 
 
 def _describeNetwork(ext, target, depth=1, dump=False):

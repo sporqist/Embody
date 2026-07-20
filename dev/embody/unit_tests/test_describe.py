@@ -37,9 +37,25 @@ class TestDescribe(EmbodyTestCase):
 
     # --- node -----------------------------------------------------------------
 
-    def test_node_basic_shape(self):
-        n = self.sandbox.create(nullCHOP, 'ndesc')
+    def test_node_summary_first_default(self):
+        # Default is summary-first: a one-line summary + connections, NO param
+        # fan-out (that is behind full=True).
+        n = self.sandbox.create(nullCHOP, 'nsum')
         r = self.envoy._describe('node', n.path)
+        self.assertIn('summary', r)
+        self.assertIn('inputs', r)
+        self.assertNotIn('nonDefaultPars', r)
+        self.assertIn('hint', r)
+
+    def test_node_math_summary(self):
+        m = self.sandbox.create(mathCHOP, 'msum')
+        m.par.gain = 2
+        r = self.envoy._describe('node', m.path)
+        self.assertIn('*2', r['summary'])
+
+    def test_node_full_shape(self):
+        n = self.sandbox.create(nullCHOP, 'ndesc')
+        r = self.envoy._describe('node', n.path, full=True)
         self.assertEqual(r['type'], 'nullCHOP')
         self.assertEqual(r['family'], 'CHOP')
         for key in ('customPars', 'nonDefaultPars', 'inputs', 'outputs'):
@@ -48,7 +64,7 @@ class TestDescribe(EmbodyTestCase):
     def test_node_nondefault_par_appears(self):
         n = self.sandbox.create(nullCHOP, 'nd2')
         n.par.timeslice = 1
-        r = self.envoy._describe('node', n.path)
+        r = self.envoy._describe('node', n.path, full=True)
         names = [p['name'] for p in r['nonDefaultPars']]
         self.assertIn('timeslice', names)
         tp = next(p for p in r['nonDefaultPars'] if p['name'] == 'timeslice')
@@ -57,11 +73,25 @@ class TestDescribe(EmbodyTestCase):
         # is the non-default (on) value.
         self.assertIn(tp['value'], ('1', 'True'))
 
+    def test_node_sequence_collapse(self):
+        # A Constant CHOP's const sequence collapses into blocks, not fanned
+        # out as const0value / const1value.
+        c = self.sandbox.create(constantCHOP, 'cseq')
+        c.par.const0value = 5
+        c.par.const1value = 9
+        r = self.envoy._describe('node', c.path, full=True)
+        self.assertIn('sequences', r)
+        seq = next(s for s in r['sequences'] if s['sequence'] == 'const')
+        self.assertTrue(seq['numBlocks'] >= 2)
+        # sequence-member pars must NOT appear in the flat list
+        flat = [p['name'] for p in r['nonDefaultPars']]
+        self.assertNotIn('const0value', flat)
+
     def test_node_custom_par_appears(self):
         c = self.sandbox.create(baseCOMP, 'cp')
         page = c.appendCustomPage('X')
         page.appendFloat('Speed')
-        r = self.envoy._describe('node', c.path)
+        r = self.envoy._describe('node', c.path, full=True)
         names = [p['name'] for p in r['customPars']]
         self.assertIn('Speed', names)
 
@@ -70,7 +100,7 @@ class TestDescribe(EmbodyTestCase):
         # the model never guesses a token/index (value stays the token).
         g = self.sandbox.create(geometryCOMP, 'gmenu')
         g.par.xord = 'rst'
-        r = self.envoy._describe('node', g.path)
+        r = self.envoy._describe('node', g.path, full=True)
         xord = next(p for p in r['nonDefaultPars'] if p['name'] == 'xord')
         self.assertEqual(xord['value'], 'rst')          # token, not an index
         self.assertIn('menu', xord)

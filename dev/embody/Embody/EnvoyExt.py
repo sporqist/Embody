@@ -812,7 +812,7 @@ class EnvoyMCPServer:
 
         @self.mcp.tool()
         def describe(mode: str, target: str = None, depth: int = 1,
-                     dump: bool = False) -> dict:
+                     dump: bool = False, full: bool = False) -> dict:
             """
             Read-only text: the knowledge & structure entry point for code_mode.
 
@@ -822,9 +822,11 @@ class EnvoyMCPServer:
             Modes:
               contract  (no target) -- the tk.* code-mode API surface. Read
                         this once before writing code_mode Python.
-              node      (target = op path) -- one operator in depth: custom
-                        pars + non-default built-in pars, each with live value,
-                        default, mode, and expression; connections; children.
+              node      (target = op path) -- one operator, SUMMARY-FIRST: a
+                        synthesized one-line summary + connections + child
+                        count (token-cheap). Pass full=True to fan out custom +
+                        non-default pars (live value/default/mode/expression),
+                        with sequence params collapsed into blocks.
               network   (target = COMP path, depth=N) -- topology (children,
                         types, wiring) to depth N. dump=True also embeds a
                         sparse non-default-only TDN dict for one-read
@@ -843,6 +845,7 @@ class EnvoyMCPServer:
                 target: op path (node/network) or optype/class/function (docs)
                 depth:  network walk depth (default 1)
                 dump:   network only -- embed the sparse TDN dump
+                full:   node only -- fan out params (default summary-first)
 
             Returns: a mode-specific dict (see each mode above), or {'error': ...}.
             """
@@ -851,6 +854,7 @@ class EnvoyMCPServer:
                 'target': target,
                 'depth': depth,
                 'dump': dump,
+                'full': full,
             })
 
         @self.mcp.tool()
@@ -5229,10 +5233,10 @@ class EnvoyExt:
         return mod.envoy_codemode.code_mode(self, code, settle_frames)
 
     def _describe(self, mode: str, target: str = None, depth: int = 1,
-                  dump: bool = False) -> dict:
+                  dump: bool = False, full: bool = False) -> dict:
         """Read-only describe: contract / node / network / docs -- see
         envoy_codemode."""
-        return mod.envoy_codemode.describe(self, mode, target, depth, dump)
+        return mod.envoy_codemode.describe(self, mode, target, depth, dump, full)
 
     def _view(self, target: str, resolution: int = 480, other: str = None,
               channels: str = None, head: int = 8, tail: int = 0,

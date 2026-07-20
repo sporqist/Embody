@@ -26,6 +26,11 @@ AgentTestCase = runner_mod.AgentTestCase
 
 # Source of truth: the @self.mcp.tool() registrations in EnvoyExt.py
 # (_register_tools). Update deliberately when the tool surface changes.
+# NOTE: the tool surface now DEFAULTS to 'codemode' (only code_mode/describe/
+# view exposed). This full inventory is what a server in 'full' mode exposes,
+# so this tier-1 contract test requires full mode -- run
+# SetToolSurface('full') (or set the _tool_surface pref) before it. See
+# revamp/BACKLOG.md.
 EXPECTED_ENVOY_TOOLS = [
     'batch_operations',
     'capture_top',

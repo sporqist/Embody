@@ -3041,12 +3041,14 @@ class EnvoyExt:
 
     def _toolSurfacePref(self):
         """The persisted tool-surface choice ('full' | 'codemode'). Main-thread
-        only (reads COMP storage)."""
+        only (reads COMP storage). DEFAULT is 'codemode' -- the code-mode surface
+        (code_mode/describe/view) is the primary interface; SetToolSurface('full')
+        restores the full 53-verb catalogue for a project that wants it."""
         try:
-            val = self.ownerComp.fetch('_tool_surface', 'full', search=False)
+            val = self.ownerComp.fetch('_tool_surface', 'codemode', search=False)
         except Exception:
-            val = 'full'
-        return val if val in ('full', 'codemode') else 'full'
+            val = 'codemode'
+        return val if val in ('full', 'codemode') else 'codemode'
 
     def SetToolSurface(self, mode: str) -> dict:
         """Choose which MCP tools Envoy exposes:

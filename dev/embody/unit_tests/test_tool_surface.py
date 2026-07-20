@@ -73,11 +73,12 @@ class TestToolSurface(EmbodyTestCase):
 
     # --- pref accessor + guard ------------------------------------------------
 
-    def test_pref_default_is_full(self):
+    def test_pref_default_is_codemode(self):
+        # The code-mode surface is the default; SetToolSurface('full') opts back.
         prev = op.Embody.fetch('_tool_surface', None, search=False)
         try:
             op.Embody.unstore('_tool_surface')
-            self.assertEqual(self.envoy._toolSurfacePref(), 'full')
+            self.assertEqual(self.envoy._toolSurfacePref(), 'codemode')
         finally:
             if prev is not None:
                 op.Embody.store('_tool_surface', prev)

@@ -6,7 +6,7 @@
 
 **create at the speed of thought.**
 
-[![Version](https://img.shields.io/badge/version-6.0.142-6ee668?style=flat-square&labelColor=181e1e)](https://github.com/sporqist/Embody/releases/latest)
+[![Version](https://img.shields.io/badge/version-6.0.143-6ee668?style=flat-square&labelColor=181e1e)](https://github.com/sporqist/Embody/releases/latest)
 [![TouchDesigner](https://img.shields.io/badge/TouchDesigner-2025-6ee668?style=flat-square&labelColor=181e1e)](https://derivative.ca/)
 [![MCP Surface](https://img.shields.io/badge/MCP_surface-code--mode-6ee668?style=flat-square&labelColor=181e1e)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-6ee668?style=flat-square&labelColor=181e1e)](LICENSE)
@@ -28,7 +28,7 @@
 > - **`describe`** — read-as-text: the `tk` contract, a summary-first op view, network topology, and **docs that fuse live introspection with the offline TD wiki** ("never guess parameters").
 > - **`view`** — read-as-render: a TOP as an inline image, a CHOP/DAT reduced to stats/rows, and op-vs-op / temporal **diffs**.
 >
-> Everything below still ships; the fork just changes the *default surface*. See the [changelog](docs/changelog.md) (v6.0.142) for the full design.
+> Everything below still ships; the fork just changes the *default surface*. See the [changelog](docs/changelog.md) for the full design.
 
 Embody puts your ideas on screen as fast as you can describe them. Operators, connections, parameters, the works. Want to try a different direction? Spin up a new approach in seconds. Compare attempts side by side. Branch off the one that works. **The tool keeps up with you, instead of the other way around.**
 

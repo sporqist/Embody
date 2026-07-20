@@ -1,5 +1,16 @@
 # Changelog
 
+## v6.0.143
+
+The code-mode surface becomes the DEFAULT, and the gaps that made codemode-only lossless are closed. This is an opinionated-fork stance: hand the model a small, sharp, self-describing surface instead of a 53-verb catalogue.
+
+- **Codemode-only is now the default tool surface**: a project with no stored choice exposes ONLY `code_mode` / `describe` / `view` (plus the bridge meta-tools); the 53 verb tools are hidden. `op.Embody.ext.Envoy.SetToolSurface('full')` restores the full catalogue. `code_mode` is a strict superset of the verbs (arbitrary Python + the `tk` toolkit), `describe` covers reads, `view` covers renders -- verified live: the server prunes to three tools and `execute_python` returns "Unknown tool".
+- **`tk.make` auto-externalizes new COMPs** per the `Autoexternalize` preference (the same `AutoExternalizeNewOp` chokepoint `create_op` uses), so hiding the verb tools no longer regresses file management. New `tk.externalize(op, strategy=None)` for explicit externalization; both surface in the `code_mode` result and `describe('contract')`.
+- **Periodic auto-checkpoint**: `code_mode` feeds its touched-COMP boundaries into Embody's autosave (its params carry no `op_path`, so the dispatch-level checkpoint couldn't see them), and a new periodic loop queues any table-dirty TDN COMP into the proven drain every 5 minutes -- a backstop for changes the event drain misses, using the cheap `dirty` column rather than per-COMP fingerprinting.
+- **`mcp-tools-reference` documents the code-mode surface**: the skill + its shipped template gain a Code-Mode Surface section (the three tools + the `SetToolSurface` flag) so user projects discover it.
+- **`describe(docs)` reports the authoritative default**: it now uses the fresh-probe `eval()` rather than `Par.default`, whose menu string can disagree with a fresh op's real value (TD 2025.33070 outTOP `filtertype`: `Par.default` says `linear` but a fresh op is `nearest`).
+- Tests: `test_codemode` 22, `test_describe` 19, `test_view` 12, `test_tool_surface` 6, `test_autosave` 22; full normal-tier run green.
+
 ## v6.0.142
 
 The Envoy **code-mode surface**: three LLM-ergonomic tools -- `code_mode`, `describe`, `view` -- landed **additively** alongside the existing 53 (nothing removed, all prior tests green), plus an opt-in flag to hide the verb catalogue behind them. The philosophy: hand the model a small, sharp, self-describing surface and a tight feedback loop instead of a catalogue of verbs.

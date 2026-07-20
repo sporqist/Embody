@@ -310,6 +310,39 @@ class EnvoyMCPServer:
             mcp_kwargs['transport_security'] = transport_security
         self.mcp = FastMCP("Envoy", **mcp_kwargs)
         self._register_tools()
+        self._applyToolSurface()
+
+    # The three code-mode tools that survive a 'codemode' tool surface.
+    _CODEMODE_TOOLS = frozenset({'code_mode', 'describe', 'view'})
+
+    def _applyToolSurface(self):
+        """When the 'codemode' surface is selected, hide the 53 verb tools and
+        expose ONLY code_mode / describe / view (the bridge meta-tools --
+        get_td_status/launch_td/restart_td/switch_instance -- are served
+        bridge-side and are unaffected).
+
+        The choice is read from sys (set on the MAIN thread before this worker
+        starts -- reading a TD param here would cross the thread boundary).
+        Default 'full' keeps every tool registered.
+        """
+        surface = getattr(sys, '_envoy_tool_surface', 'full')
+        if surface != 'codemode':
+            return
+        try:
+            tm = self.mcp._tool_manager
+            removed = 0
+            for name in list(tm._tools.keys()):
+                if name in self._CODEMODE_TOOLS:
+                    continue
+                try:
+                    tm.remove_tool(name)
+                except Exception:
+                    tm._tools.pop(name, None)
+                removed += 1
+            print(f'[Envoy] tool surface = codemode: hid {removed} verb tools, '
+                  f'exposing only {sorted(self._CODEMODE_TOOLS)}')
+        except Exception as e:
+            print(f'[Envoy][WARNING] _applyToolSurface failed: {e}')
 
     def _touch_session(self, sid: str, label: str = None,
                        operation: str = None) -> None:
@@ -3005,6 +3038,37 @@ class EnvoyExt:
 
         return None
 
+    def _toolSurfacePref(self):
+        """The persisted tool-surface choice ('full' | 'codemode'). Main-thread
+        only (reads COMP storage)."""
+        try:
+            val = self.ownerComp.fetch('_tool_surface', 'full', search=False)
+        except Exception:
+            val = 'full'
+        return val if val in ('full', 'codemode') else 'full'
+
+    def SetToolSurface(self, mode: str) -> dict:
+        """Choose which MCP tools Envoy exposes:
+          'full'     -- all tools (the 53 verbs + code_mode/describe/view).
+          'codemode' -- ONLY code_mode / describe / view (verb tools hidden;
+                        bridge meta-tools are unaffected).
+        Persisted in the .toe; restarts the server to apply the change."""
+        if mode not in ('full', 'codemode'):
+            return {'error': "mode must be 'full' or 'codemode'"}
+        self.ownerComp.store('_tool_surface', mode)
+        self.ownerComp.storeStartupValue('_tool_surface', mode)
+        sys._envoy_tool_surface = mode
+        if self.ownerComp.par.Envoyenable.eval():
+            try:
+                self.Stop()
+            except Exception:
+                pass
+            run(f"op('{self.ownerComp.path}').ext.Envoy.Start()",
+                fromOP=self.ownerComp, delayFrames=5)
+        return {'success': True, 'tool_surface': mode,
+                'note': 'server restarting to apply' if
+                self.ownerComp.par.Envoyenable.eval() else 'stored (Envoy off)'}
+
     def Start(self) -> None:
         """Start MCP server via op.TDResources.ThreadManager"""
         # Envoyenable is the master switch. Queued restart fires (auto-restart
@@ -3386,6 +3450,11 @@ class EnvoyExt:
             'response': self.response_queue,
         }
         sys._envoy_queues = _q_registry
+
+        # Capture the tool-surface preference for the worker BEFORE it starts
+        # (the worker cannot read a TD param -- thread boundary). 'codemode'
+        # exposes only code_mode/describe/view; default 'full' keeps all tools.
+        sys._envoy_tool_surface = self._toolSurfacePref()
 
         # Create and enqueue a TDTask
         self.current_task = self.ThreadManager.TDTask(

@@ -1,10 +1,10 @@
 format: tdn
 version: '2.0'
-build: 884
-generator: Embody/6.0.143
+build: 890
+generator: Embody/6.0.144
 td_build: 099.2025.33070
-source_file: Embody-6.143.toe
-exported_at: '2026-07-20T19:58:08Z'
+source_file: Embody-6.144.toe
+exported_at: '2026-07-20T21:50:36Z'
 network_path: /embody/Embody
 options:
   include_dat_content: false
@@ -281,7 +281,7 @@ custom_pars:
     label: Auto-Save Status
     readOnly: true
     help: 'Read-only auto-save state: Idle / Saving / Bypassed (Perform Mode) / Disabled.'
-    value: Saved 19:57:21 UTC
+    value: Saved 21:49:58 UTC
   - name: Tdnstriponsave
     style: Toggle
     label: Strip on Save
@@ -706,7 +706,7 @@ custom_pars:
     startSection: true
     readOnly: true
     help: Embody version string (read-only).
-    value: 6.0.143
+    value: 6.0.144
   - name: Touchbuild
     style: Str
     label: Touch Build
@@ -723,7 +723,7 @@ custom_pars:
     label: Build Number
     readOnly: true
     help: Embody build number (read-only). Incremented with each release.
-    value: 884
+    value: 890
   - name: Github
     style: Pulse
     label: GitHub
@@ -734,7 +734,7 @@ custom_pars:
     label: Build Date
     readOnly: true
     help: Date of this Embody build (read-only).
-    value: 2026-07-20 19:58:08 UTC
+    value: 2026-07-20 21:50:35 UTC
   - name: Help
     style: Pulse
     help: Opens the Embody help documentation.
@@ -782,7 +782,7 @@ storage:
   _tdn_restore_failures:
   - /embody/base1
   _start_in_progress: true
-  _watchdog_gen: 973
+  _watchdog_gen: 975
   _suite_proof_progress:
     todo:
     - test_ancestor_rename
@@ -924,8 +924,8 @@ storage:
         tot: 33
         fail: 1
     pending_after: absent
-  _clip_watch_gen: 738
-  _shortcut_rec_gen: 363
+  _clip_watch_gen: 740
+  _shortcut_rec_gen: 377
 operators:
 - name: help
   type: opviewerCOMP
@@ -1177,8 +1177,8 @@ operators:
     file: embody/Embody/EnvoyExt.py
   position: [-700, 700]
   tags:
-  - py
   - TDExtension
+  - py
 - name: mousein1
   type: mouseinCHOP
   parameters:

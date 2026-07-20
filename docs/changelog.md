@@ -1,5 +1,12 @@
 # Changelog
 
+## v6.0.144
+
+Ships the skills/rules corpus reconciled with the codemode-only default surface (v6.0.143), so user projects get codemode-aware guidance in the shipped templates.
+
+- **Skills reconciled with the code-mode surface**: the shipped skills + rules mapped their steps to the now-hidden 53 verb tools. The 10 verb-coupled files (create-operator, debug-operator, externalize-operator, network-layout, mcp-tools-reference, td-api-reference, pop-networks, manage-annotations, visual-aesthetics, skill-prerequisites) are now DUAL-SURFACE: they lead with the codemode tool (`code_mode` / `describe` / `view` / the `tk` toolkit) and keep each verb name as the `SetToolSurface('full')` path, with all domain knowledge preserved verbatim. The always-loaded `skill-prerequisites` rule keys its load triggers to the ACTION + codemode tool (fixing the "load a skill before every verb" churn). Produced by a multi-agent workflow (one edit + a 3-lens adversarial panel per file) that caught and fixed 5 real defects (e.g. `set_op_position` is `op.nodeX/nodeY`, not `tk.setp`; `describe(network)` cannot see `utility=True` annotations; `tk.wire` connects but does not arrange). `test_template_sync` green (all 9 src<->template pairs in sync).
+- **Fork-branded release artifacts**: the save hook now exports `Embody-codemode-v<version>.tox` (was `Embody-v<version>.tox`), and GitHub releases are tagged `v<version>-codemode`. The version number is the upstream Embody build line this fork is built on (dylanroscover/Embody), so the artifact name makes upstream compatibility clear at a glance.
+
 ## v6.0.143
 
 The code-mode surface becomes the DEFAULT, and the gaps that made codemode-only lossless are closed. This is an opinionated-fork stance: hand the model a small, sharp, self-describing surface instead of a 53-verb catalogue.

@@ -129,9 +129,14 @@ def onProjectPreSave():
     # update build
     comp.par.Touchbuild = build
 
+    # Release artifacts are fork-branded so it is always clear this is the
+    # sporqist codemode fork built on the upstream Embody build line (the
+    # version number IS the upstream lineage). See docs/changelog.md v6.0.144.
+    RELEASE_PREFIX = f"{comp.name}-codemode"
+
     # try to delete last release
     try:
-        old_release = Path(project.folder).parents[0] / 'release' / f"{comp.name}-v{old_version}.tox"
+        old_release = Path(project.folder).parents[0] / 'release' / f"{RELEASE_PREFIX}-v{old_version}.tox"
         old_release.unlink()
     except Exception as e:
         # You might want to log the exception for debugging purposes
@@ -143,7 +148,7 @@ def onProjectPreSave():
     comp.par.Networkpath = ''
 
     # save out self-contained portable .tox (strips external file references)
-    save_path = Path(project.folder).parents[0] / 'release' / f"{comp.name}-v{new_version}.tox"
+    save_path = Path(project.folder).parents[0] / 'release' / f"{RELEASE_PREFIX}-v{new_version}.tox"
     comp.ExportPortableTox(save_path=str(save_path))
 
 def onProjectPostSave():

@@ -1,0 +1,30 @@
+NOTICE
+======
+
+This project builds on Embody + Envoy, the TouchDesigner externalization
+toolkit and embedded MCP server.
+
+    Embody / Envoy
+    Copyright (c) 2020-present The Experiential Company, LLC
+    Licensed under the MIT License (see LICENSE).
+
+The code-mode surface (`describe` / `code_mode` / `view`; see revamp/REVAMP.md
+and revamp/BUILD_BRIEF.md) is additive work layered on top of -- and reuses the
+proven infrastructure and patterns of -- Embody/Envoy. In particular it lifts:
+
+  - The MCP transport: FastMCP -> streamable_http_app() -> uvicorn on
+    127.0.0.1, hosted off the main thread inside TD's Thread Manager.
+  - The main-thread marshaling model: a request Queue drained by a per-frame
+    RefreshHook (capped 5/frame), dict-dispatch handlers, a response Queue,
+    and a per-request threading.Event the tool thread blocks on.
+  - The STDIO <-> HTTP bridge with launch/restart-TD meta-tools.
+  - The `uv`-based project-local venv bootstrap (off-thread, stdin=DEVNULL).
+  - The pragmatic watchdog (waiter timeout + socket-liveness revive).
+  - Live TD introspection (inspect / pydoc) and offline-wiki HTML parsing.
+  - The TDN sparse network format (TDNExt) for whole-network comprehension.
+  - Consolidated operator diagnostics (get_op_errors) and TOP capture.
+  - The network-layout helpers (auto-positioning, docked-op hugging) reused by
+    the tk.make/tk.wire code-mode primitives.
+
+The MIT license above and in LICENSE covers the reused Embody/Envoy code and
+patterns. This notice is retained for attribution per the MIT terms.

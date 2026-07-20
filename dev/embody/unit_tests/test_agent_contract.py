@@ -30,6 +30,7 @@ EXPECTED_ENVOY_TOOLS = [
     'batch_operations',
     'capture_top',
     'claim_scope',
+    'code_mode',
     'connect_ops',
     'cook_op',
     'copy_op',

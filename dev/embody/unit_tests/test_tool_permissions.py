@@ -101,7 +101,8 @@ class TestToolPermissions(EmbodyTestCase):
 
     def test_readonly_tools_exclude_mutating_ops(self):
         # A guard against accidentally auto-approving a destructive tool under 'some'.
-        forbidden = {'create_op', 'delete_op', 'execute_python', 'set_parameter',
+        forbidden = {'create_op', 'delete_op', 'execute_python', 'code_mode',
+                     'set_parameter',
                      'import_network', 'externalize_op', 'exec_op_method',
                      'connect_ops', 'set_dat_content', 'edit_dat_content',
                      'copy_op', 'rename_op', 'run_tests', 'restart_td'}

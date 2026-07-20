@@ -36,6 +36,7 @@ CLAUDE_SMOKE_MODEL = 'sonnet'
 # expensive tools a smoke task must never touch.
 CLAUDE_DISALLOWED = ','.join([
     'mcp__envoy__execute_python',
+    'mcp__envoy__code_mode',
     'mcp__envoy__run_tests',
     'mcp__envoy__delete_op',
     'mcp__envoy__import_network',

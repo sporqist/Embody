@@ -51,6 +51,7 @@ _SESSION_CTX = contextvars.ContextVar('envoy_session', default=(None, None))
 _WRITE_OPERATIONS = frozenset({
     'create_op', 'delete_op', 'set_parameter', 'connect_ops',
     'disconnect_op', 'copy_op', 'rename_op', 'execute_python',
+    'code_mode',
     'set_dat_content', 'edit_dat_content', 'set_op_flags',
     'set_op_position', 'layout_children', 'externalize_op',
     'remove_externalization_tag', 'save_externalization',
@@ -61,6 +62,7 @@ _WRITE_OPERATIONS = frozenset({
 # Coarse scopes for operations whose footprint is not a single op path.
 _SPECIAL_SCOPES = {
     'execute_python': 'project:python',
+    'code_mode': 'project:python',
     'run_tests': 'project:tests',
 }
 
@@ -758,6 +760,53 @@ class EnvoyMCPServer:
                 Dict with execution result or error
             """
             return self._execute_in_td('execute_python', {'code': code})
+
+        @self.mcp.tool()
+        def code_mode(code: str, settle_frames: int = 10) -> dict:
+            """
+            Execute Python live in TouchDesigner with the `tk` helper namespace,
+            auto-settle a few cook frames, and return CONSOLIDATED diagnostics
+            so you never have to poll for delayed errors.
+
+            This is the code-mode execution surface: write ordinary Python that
+            runs on TD's main thread with full native TD in scope (op, ops,
+            operator type names, td classes), PLUS a curated `tk.` toolkit that
+            removes the common footguns. After your code runs, TD force-cooks
+            the operators you touched and the response carries any errors,
+            warnings, and GLSL shader-compile logs that surfaced.
+
+            The `tk` namespace (call describe(mode='contract') for full detail):
+              tk.make(optype, name=None, parent=None, **pars) -> op
+                  create + auto-position + hug docked companions + set pars.
+              tk.wire(*ops, source_index=0, dest_index=0) -> [(src,dst), ...]
+                  chain-connect via primary connectors (accepts ops or paths).
+              tk.setp(op, **pars) -> op   batch-set params (clear error on typo).
+              tk.find(pattern, type=None, parent=None, depth=None) -> [op, ...]
+              tk.settle(frames=10, targets=None) -> diagnostics
+              tk.errors(target='/', recurse=True) -> diagnostics  (no cook)
+              tk.checkpoint(target) -> dict   snapshot a TDN COMP to disk.
+              tk.report(obj)   return JSON-able data explicitly (separate from
+                  stdout; exec() discards the last expression value).
+
+            Fresh globals every call -- no state persists between calls; keep
+            persistent state in the TD project itself.
+
+            Args:
+                code:          Python source to execute on the main thread.
+                settle_frames: Cook iterations for the auto-settle after your
+                    code runs (default 10, 0 to skip).
+
+            Returns:
+                Dict with success, stdout, report (tk.report value),
+                diagnostics {errorCount, warningCount, errors, warnings},
+                created (op paths), settled_frames, elapsed_ms. On an
+                exception: success=False plus error + traceback, with stdout,
+                created, and diagnostics still included so you can fix forward.
+            """
+            return self._execute_in_td('code_mode', {
+                'code': code,
+                'settle_frames': settle_frames,
+            })
 
         # === Introspection & Diagnostics Tools ===
 
@@ -4157,7 +4206,7 @@ class EnvoyExt:
     _UNDOABLE_OPS = frozenset({
         'create_op', 'delete_op', 'copy_op', 'rename_op',
         'set_parameter', 'connect_ops', 'disconnect_op',
-        'execute_python', 'set_dat_content', 'edit_dat_content',
+        'execute_python', 'code_mode', 'set_dat_content', 'edit_dat_content',
         'set_op_flags', 'set_op_position', 'layout_children',
         'exec_op_method', 'externalize_op', 'remove_externalization_tag',
         'create_extension', 'import_network',
@@ -4184,6 +4233,7 @@ class EnvoyExt:
             'copy_op': self._copy_op,
             'get_connections': self._get_connections,
             'execute_python': self._execute_python,
+            'code_mode': self._code_mode,
             # DAT content
             'get_dat_content': self._get_dat_content,
             'set_dat_content': self._set_dat_content,
@@ -5046,6 +5096,11 @@ class EnvoyExt:
             if removed:
                 msg += f' (rolled back {removed} operator(s) the script created before failing)'
             return {'error': msg}
+
+    def _code_mode(self, code: str, settle_frames: int = 10) -> dict:
+        """Code-mode execution: run Python with the tk namespace, auto-settle,
+        return consolidated diagnostics -- see envoy_codemode."""
+        return mod.envoy_codemode.code_mode(self, code, settle_frames)
 
     def _rollbackNewOps(self, pre_paths) -> int:
         """A failed execute_python must not leave a half-built network: destroy

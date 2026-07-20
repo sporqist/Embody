@@ -50,6 +50,10 @@ class TestAutosave(EmbodyTestCase):
                 pass
         ext._pending_checkpoint_roots.clear()
         ext._autosave_armed = False
+        # Kill any periodic loop a test armed (bump the gen so a scheduled tick
+        # fires stale and stops), so no background checkpoint runs post-test.
+        ext._periodic_gen += 1
+        ext._periodic_armed = False
         super().tearDown()
 
     def _make_tdn(self, name):
@@ -305,3 +309,37 @@ class TestAutosave(EmbodyTestCase):
             self.assertFalse(self.embody_ext._autosaveEnabled())
         finally:
             p.val = old
+
+    # --- periodic checkpoint (backstop for changes the event drain misses) ---
+
+    def test_periodic_dirty_scan_finds_dirty_tdn(self):
+        comp, _ = self._make_tdn('per_dirty')
+        # mark the row dirty in the table (what the refresh sweep would do)
+        self.embody_ext.Externalizations[comp.path, 'dirty'] = 'True'
+        dirty = self.embody_ext._dirtyTrackedTDNComps()
+        self.assertIn(comp.path, dirty)
+        # a clean row is not listed
+        self.embody_ext.Externalizations[comp.path, 'dirty'] = ''
+        self.assertNotIn(comp.path, self.embody_ext._dirtyTrackedTDNComps())
+
+    def test_periodic_tick_stale_gen_is_noop(self):
+        ext = self.embody_ext
+        ext._periodic_gen = 7
+        ext._periodic_armed = True
+        ext._pending_checkpoint_roots.clear()
+        # a tick with the wrong gen must not queue or reschedule
+        ext._periodicCheckpointTick(3)
+        self.assertEqual(len(ext._pending_checkpoint_roots), 0)
+        self.assertTrue(ext._periodic_armed)  # untouched by the stale tick
+
+    def test_arm_periodic_is_idempotent(self):
+        ext = self.embody_ext
+        ext._periodic_armed = False
+        gen0 = ext._periodic_gen
+        ext.ArmPeriodicCheckpoint()
+        self.assertTrue(ext._periodic_armed)
+        self.assertEqual(ext._periodic_gen, gen0 + 1)
+        # already armed -> no second loop
+        ext.ArmPeriodicCheckpoint()
+        self.assertEqual(ext._periodic_gen, gen0 + 1)
+        # tearDown invalidates the scheduled loop

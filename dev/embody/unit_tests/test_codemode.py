@@ -206,6 +206,25 @@ class TestCodeMode(EmbodyTestCase):
         self.assertTrue(result['success'])
         self.assertTrue(isinstance(result['report'], str))
 
+    # --- auto-externalize integration (tk.make / tk.externalize) --------------
+
+    def test_make_auto_externalize_runs_clean(self):
+        # tk.make routes through the same AutoExternalizeNewOp chokepoint as
+        # create_op. Inside the (externalized) test sandbox it correctly SKIPS
+        # (ancestor .tdn already captures the subtree) -- so no error, no files.
+        code = "tk.make('baseCOMP', 'axc', parent={sb!r})".format(sb=self.sb)
+        result = self.envoy._code_mode(code=code)
+        self.assertTrue(result['success'], result.get('error', ''))
+        # skipped inside an externalized ancestor -> no 'externalized' key
+        self.assertNotIn('externalized', result)
+
+    def test_externalize_bad_target_errors(self):
+        result = self.envoy._code_mode(
+            code="tk.report(tk.externalize('/no/such/op'))")
+        # tk.externalize resolves the target first -> raises -> code_mode error
+        self.assertFalse(result['success'])
+        self.assertIn('not found', result['error'])
+
     # --- settle_frames tunable ------------------------------------------------
 
     def test_settle_frames_respected(self):

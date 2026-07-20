@@ -65,6 +65,9 @@ def onStart():
 	# Pin current TD build into .embody/project.json so the Envoy bridge can
 	# pick a matching install on fresh clones (committed; survives git clone).
 	run(f"op('{parent.Embody}').ext.Embody._writeProjectJson()", delayFrames=80)
+	# Start the periodic dirty-COMP checkpoint loop (backstop autosave) once
+	# startup has settled.
+	run(f"op('{parent.Embody}').ext.Embody.ArmPeriodicCheckpoint()", delayFrames=120)
 	return
 
 def onCreate():

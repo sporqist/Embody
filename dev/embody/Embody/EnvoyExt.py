@@ -817,6 +817,7 @@ class EnvoyMCPServer:
               tk.layout(*ops, dx_gap=200) -> ops   arrange in a forward-flow row.
               tk.setp(op, **pars) -> op   batch-set params (clear error on typo).
               tk.find(pattern, type=None, parent=None, depth=None) -> [op, ...]
+              tk.externalize(op, strategy=None) -> dict   write op to disk.
               tk.settle(frames=10, targets=None) -> diagnostics
               tk.errors(target='/', recurse=True) -> diagnostics  (no cook)
               tk.checkpoint(target) -> dict   snapshot a TDN COMP to disk.

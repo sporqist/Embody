@@ -66,6 +66,7 @@ class _Toolkit:
         self._ext = ext
         self._created = []      # ops this call created via tk.make (paths)
         self._watched = []      # ops to include in settle/diagnostics (ops)
+        self._externalized = []  # {path, ...} auto/explicitly externalized
         self._report = None     # structured return channel payload
         self._reported = False
 
@@ -106,9 +107,10 @@ class _Toolkit:
 
         Returns: the created op. Tracked for auto-settle + diagnostics.
 
-        Unlike the create_op MCP tool, tk.make does NOT auto-externalize -- it
-        is a raw building primitive; externalize explicitly when you want a
-        file on disk.
+        Like the create_op MCP tool, a new COMP is AUTO-EXTERNALIZED per the
+        Envoy `Autoexternalize` preference (additively, at its boundary) -- so
+        the code-mode surface keeps Embody's file management even when the verb
+        tools are hidden. Use tk.externalize(op) to externalize explicitly.
         """
         if parent is None:
             try:
@@ -154,7 +156,30 @@ class _Toolkit:
             self.setp(new_op, **pars)
         self._created.append(new_op.path)
         self._watch(new_op)
+        # Auto-externalize per the Autoexternalize preference (same chokepoint
+        # create_op uses). Additive + boundary-scoped; never breaks creation.
+        try:
+            tag = op.Embody.ext.Embody.AutoExternalizeNewOp(new_op)
+            if tag:
+                self._externalized.append({'path': new_op.path, 'auto': True,
+                                           'tag': tag})
+        except Exception as e:
+            self._ext._log(f'tk.make auto-externalize failed for '
+                           f'{new_op.path}: {e}', 'WARNING')
         return new_op
+
+    def externalize(self, target, strategy=None):
+        """Externalize an operator to disk explicitly (tag + write), honoring
+        Embody's strategy rules. `strategy` is the tag/strategy ('tdn'/'tox'
+        for COMPs, 'py'/'txt'/... for DATs); None auto-detects. Returns the
+        externalize result dict. The code-mode counterpart to the
+        externalize_op verb tool."""
+        oper = self._resolve(target)
+        result = mod.envoy_ops.externalize_op(self._ext, oper.path, strategy)
+        if isinstance(result, dict) and result.get('success'):
+            self._externalized.append({'path': oper.path, 'auto': False,
+                                       'tag': result.get('tag')})
+        return result
 
     def wire(self, *targets, source_index=0, dest_index=0, layout=False):
         """Chain-connect operators left to right in one call.
@@ -596,6 +621,18 @@ def code_mode(ext, code, settle_frames=10):
         diagnostics = {'errorCount': 0, 'warningCount': 0,
                        'errors': [], 'warnings': []}
 
+    # Feed the touched-COMP boundaries into Embody's autosave. code_mode's
+    # params carry no op_path, so the dispatch-level checkpoint can't see what
+    # it changed -- without this, code_mode mutations would never auto-save
+    # (the gap for a codemode-only workflow).
+    try:
+        embody = op.Embody.ext.Embody
+        for oper in tk._watched:
+            if getattr(oper, 'valid', False):
+                embody.NoteCheckpointTouch(oper.path)
+    except Exception:
+        pass
+
     elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
     result = {
         'success': error is None,
@@ -606,6 +643,8 @@ def code_mode(ext, code, settle_frames=10):
         'settled_frames': settled,
         'elapsed_ms': elapsed_ms,
     }
+    if tk._externalized:
+        result['externalized'] = tk._externalized
     if error is not None:
         result['error'] = error
         if tb:
@@ -629,7 +668,7 @@ def code_mode(ext, code, settle_frames=10):
 
 _DESCRIBE_MODES = ('contract', 'node', 'network', 'docs')
 
-_CONTRACT_HELPERS = ('make', 'wire', 'layout', 'setp', 'find',
+_CONTRACT_HELPERS = ('make', 'wire', 'layout', 'setp', 'find', 'externalize',
                      'settle', 'errors', 'checkpoint', 'report')
 
 
@@ -1078,10 +1117,17 @@ def _liveOptypeInfo(ext, optype):
         pars = []
         for p in probe.pars():
             entry = {'name': p.name, 'label': p.label}
+            # The probe is a FRESH op, so eval() IS the authoritative default --
+            # more accurate than Par.default, whose menu string can disagree
+            # with a fresh op's actual value (TD 33070 outTOP filtertype:
+            # Par.default='linear' but a fresh op is 'nearest').
             try:
-                entry['default'] = str(p.default)
+                entry['default'] = str(p.eval())
             except Exception:
-                entry['default'] = None
+                try:
+                    entry['default'] = str(p.default)
+                except Exception:
+                    entry['default'] = None
             try:
                 entry['style'] = str(p.style)
             except Exception:

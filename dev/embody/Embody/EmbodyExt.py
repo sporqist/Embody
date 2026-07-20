@@ -229,6 +229,8 @@ class EmbodyExt:
         self._last_checkpoint_activity = 0.0   # time.monotonic()
         self._autosave_gen = 0
         self._autosave_armed = False
+        self._periodic_gen = 0                 # periodic-checkpoint run()-loop token
+        self._periodic_armed = False
 
         # COMP paths the user answered plain-Ignore for in the dropped-.tox
         # dialog this session -- subsequent sweeps skip them instead of
@@ -3094,6 +3096,7 @@ class EmbodyExt:
     _AUTOSAVE_IDLE_SECONDS = 1.0    # checkpoint this long after the last MCP mutation
     _AUTOSAVE_POLL_FRAMES = 12      # re-check cadence while waiting to settle
     _AUTOSAVE_FPS_FLOOR_FRAC = 0.9  # perf-gate: defer if fps < this * target
+    _AUTOSAVE_INTERVAL_SECONDS = 300  # periodic dirty-COMP checkpoint (0 = off)
 
     def _autosaveEnabled(self) -> bool:
         """True if the Autosave toggle is on (default on until the param exists)."""
@@ -3195,6 +3198,70 @@ class EmbodyExt:
                 p.val = msg
             except Exception:
                 pass
+
+    # --- Periodic checkpoint (backstop for changes the event drain misses) ---
+    # The event-armed drain only sees COMPs touched via MCP with an op_path;
+    # code_mode mutations and manual edits can slip past it. This periodic tick
+    # queues any DIRTY tracked TDN COMP into the SAME drain, so nothing dirty
+    # sits uncheckpointed for longer than the interval. Reuses the drain's
+    # one-per-frame + perf/save-window gating -- it only QUEUES here.
+
+    def ArmPeriodicCheckpoint(self) -> None:
+        """(Re)start the periodic checkpoint loop. Idempotent; safe from startup
+        and after reinit. No-op if the interval is 0."""
+        if self._AUTOSAVE_INTERVAL_SECONDS <= 0 or self._periodic_armed:
+            return
+        self._armPeriodicCheckpoint()
+
+    def _armPeriodicCheckpoint(self) -> None:
+        self._periodic_armed = True
+        self._periodic_gen += 1
+        run(f"op({self.my.path!r}).ext.Embody._periodicCheckpointTick({self._periodic_gen})",
+            fromOP=self.my, delayMilliSeconds=int(self._AUTOSAVE_INTERVAL_SECONDS * 1000))
+
+    def _periodicCheckpointTick(self, gen: int) -> None:
+        """Queue dirty tracked TDN COMPs into the drain, then reschedule. Guarded
+        against stale instances / superseded loops (reinit collapses the loop)."""
+        # reinit guard + superseded-gen guard (one live loop, like the drain)
+        if self.my.ext.Embody is not self or gen != self._periodic_gen:
+            return
+        self._periodic_armed = False
+        try:
+            if (self._autosaveEnabled() and not self._performMode
+                    and not self.my.fetch('_suppress_dialogs', False, search=False)):
+                # Read the CHEAP dirty signal (the table's 'dirty' column,
+                # maintained by the refresh sweep) -- NOT _isTDNDirty per COMP,
+                # which recomputes a ~40ms fingerprint and would spike the frame
+                # across 60+ COMPs. The drain does the actual checkpoints one
+                # per frame; we only queue here.
+                queued = 0
+                for comp_path in self._dirtyTrackedTDNComps():
+                    if op(comp_path) is not None:
+                        self._queueCheckpoint(comp_path)
+                        queued += 1
+                if queued:
+                    self.Log(f'Periodic autosave: queued {queued} dirty COMP(s)',
+                             'DEBUG')
+        except Exception as e:
+            self.Log(f'Periodic checkpoint tick failed: {e}', 'DEBUG')
+        # Reschedule the loop (fresh gen so a stray old tick can't double it).
+        if self._AUTOSAVE_INTERVAL_SECONDS > 0:
+            self._armPeriodicCheckpoint()
+
+    def _dirtyTrackedTDNComps(self):
+        """Paths of TDN-strategy rows flagged dirty in the table (cheap read;
+        the refresh sweep maintains the 'dirty' column -- no fingerprinting)."""
+        out = []
+        try:
+            tbl = self.Externalizations
+            for r in range(1, tbl.numRows):
+                strat = tbl[r, 'strategy'].val if tbl[r, 'strategy'] else ''
+                dirty = tbl[r, 'dirty'].val if tbl[r, 'dirty'] else ''
+                if strat == 'tdn' and dirty and dirty.lower() not in ('', '0', 'false'):
+                    out.append(tbl[r, 'path'].val)
+        except Exception:
+            pass
+        return out
 
     def _preRiskyCheckpoint(self, operation: str, params: dict) -> None:
         """Synchronously checkpoint the touched TDN root BEFORE a destructive

@@ -8,6 +8,18 @@ description: "MUST READ before first MCP tool call in a session. Complete Envoy 
 
 Mutating TD-authoring operations are wrapped in TD undo blocks (one batch_operations call = one Ctrl+Z step); read-only tools, run_tests, cook_op, and disk-only ops (export_network, save_externalization) are not.
 
+## Code-Mode Surface (recommended: code_mode / describe / view)
+
+Three LLM-ergonomic tools that cover everything the verb catalogue below does, with far less context tax. Call `describe('contract')` once to get the full `tk.*` helper API.
+
+| Tool | Parameters | Description |
+|------|-----------|-------------|
+| `code_mode` | `code`, `settle_frames?` | Execute Python live on TD's main thread with a curated `tk.` toolkit (make/wire/layout/setp/find/externalize/settle/errors/checkpoint/report) over native `td`. After your code runs, TD force-cooks the touched ops and the response carries CONSOLIDATED diagnostics -- op errors + warnings + GLSL shader-compile logs -- so you never poll. Fresh globals each call. `tk.make` auto-externalizes new COMPs per the `Autoexternalize` preference (same as `create_op`). |
+| `describe` | `mode`, `target?`, `depth?`, `dump?`, `full?` | Read-as-text; required `mode`, no smart dispatch. `contract` = the tk API; `node` = summary-first op (a one-line summary; `full=True` fans out custom + non-default params with sequences collapsed, menu params showing label + options); `network` = topology to `depth` (`dump=True` embeds a sparse TDN dict); `docs` = live introspection FUSED with offline-wiki prose (authoritative param defaults -- "never guess parameters"). |
+| `view` | `target`, `resolution?`, `other?`, `channels?`, `head?`, `tail?`, `stats?`, `cols?`, `pin?` | Read-as-render. TOP -> inline image (<=480p default, tunable) with a black/empty-frame Quality verdict; CHOP -> per-channel stats + head/tail samples; DAT -> header + rows. `other=<op path>` -> relational diff (op-vs-op); otherwise a CHOP/DAT view auto-diffs vs your last view (temporal; `pin=True` sets a sticky baseline). |
+
+**Tool-surface flag.** `op.Embody.ext.Envoy.SetToolSurface('codemode')` hides the 53 verb tools below and exposes ONLY these three (the bridge meta-tools -- `get_td_status`/`launch_td`/`restart_td`/`switch_instance` -- stay). `SetToolSurface('full')` restores the full catalogue. In `codemode` mode, read `describe('contract')` first, then drive everything through `code_mode` (it can do anything the verbs do, plus arbitrary logic).
+
 ## Operator Management
 
 | Tool | Parameters | Description |

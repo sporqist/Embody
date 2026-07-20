@@ -6,18 +6,29 @@
 
 **create at the speed of thought.**
 
-[![Version](https://img.shields.io/badge/version-6.0.142-6ee668?style=flat-square&labelColor=181e1e)](https://github.com/dylanroscover/Embody/releases/latest)
+[![Version](https://img.shields.io/badge/version-6.0.142-6ee668?style=flat-square&labelColor=181e1e)](https://github.com/sporqist/Embody/releases/latest)
 [![TouchDesigner](https://img.shields.io/badge/TouchDesigner-2025-6ee668?style=flat-square&labelColor=181e1e)](https://derivative.ca/)
-[![MCP Tools](https://img.shields.io/badge/MCP_tools-53-6ee668?style=flat-square&labelColor=181e1e)](https://modelcontextprotocol.io/)
+[![MCP Surface](https://img.shields.io/badge/MCP_surface-code--mode-6ee668?style=flat-square&labelColor=181e1e)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-6ee668?style=flat-square&labelColor=181e1e)](LICENSE)
-[![GitHub Stars](https://img.shields.io/github/stars/dylanroscover/Embody?style=flat-square&labelColor=181e1e&color=6ee668)](https://github.com/dylanroscover/Embody/stargazers)
-[![Downloads](https://img.shields.io/github/downloads/dylanroscover/Embody/total?style=flat-square&labelColor=181e1e&color=6ee668)](https://github.com/dylanroscover/Embody/releases)
+[![GitHub Stars](https://img.shields.io/github/stars/sporqist/Embody?style=flat-square&labelColor=181e1e&color=6ee668)](https://github.com/sporqist/Embody/stargazers)
 
-[**embody.tools**](https://embody.tools) &nbsp;&middot;&nbsp; [Documentation](https://dylanroscover.github.io/Embody/) &nbsp;&middot;&nbsp; [Manifesto](https://dylanroscover.github.io/Embody/manifesto/) &nbsp;&middot;&nbsp; [Changelog](https://dylanroscover.github.io/Embody/changelog/)
+[**Changelog**](docs/changelog.md) &nbsp;&middot;&nbsp; Fork of [**dylanroscover/Embody**](https://github.com/dylanroscover/Embody) &nbsp;&middot;&nbsp; [upstream docs&nbsp;&#8599;](https://dylanroscover.github.io/Embody/)
 
 </div>
 
 ---
+
+> ### ⑂ This is an opinionated fork
+>
+> An experiment in **LLM-ergonomic tooling** built on top of [Embody](https://github.com/dylanroscover/Embody). It rebuilds Envoy's interface around a **3-tool code-mode surface** — `code_mode` · `describe` · `view` — that ships **on by default**, hiding the original 53-verb catalogue (restore it anytime with `SetToolSurface('full')`).
+>
+> The bet: hand the model a small, sharp, self-describing surface and a tight feedback loop, not a catalogue of verbs.
+>
+> - **`code_mode`** runs Python live in TD with a curated `tk.` toolkit (`make`/`wire`/`layout`/`setp`/`find`/`externalize`/`settle`/`report`) and returns **consolidated diagnostics** after an auto-settle — op errors, warnings, and GLSL compile logs the model would otherwise miss. Anything the 53 verbs did, `code_mode` does, plus arbitrary logic.
+> - **`describe`** — read-as-text: the `tk` contract, a summary-first op view, network topology, and **docs that fuse live introspection with the offline TD wiki** ("never guess parameters").
+> - **`view`** — read-as-render: a TOP as an inline image, a CHOP/DAT reduced to stats/rows, and op-vs-op / temporal **diffs**.
+>
+> Everything below still ships; the fork just changes the *default surface*. See the [changelog](docs/changelog.md) (v6.0.142) for the full design.
 
 Embody puts your ideas on screen as fast as you can describe them. Operators, connections, parameters, the works. Want to try a different direction? Spin up a new approach in seconds. Compare attempts side by side. Branch off the one that works. **The tool keeps up with you, instead of the other way around.**
 
@@ -33,7 +44,7 @@ Embody puts your ideas on screen as fast as you can describe them. Operators, co
 
 | | What | Why it matters |
 |---|---|---|
-| 🤖 | **Envoy MCP Server** | 53 tools let your AI assistant build, wire, parameterize, and debug live networks. The first time you watch it happen, you stop typing operator names by hand for good. |
+| 🤖 | **Envoy MCP Server** | A 3-tool **code-mode surface** (`code_mode` / `describe` / `view`) — default on in this fork — lets your AI assistant build, wire, parameterize, and debug live networks by writing Python with a curated toolkit and getting consolidated diagnostics back. The original 53 verb tools are one `SetToolSurface('full')` away. |
 | 📄 | **TDN Network Format** | Networks become text. Diff two versions, revisit any version, hand an LLM a complete picture of what's on screen — all from a single `.tdn` file. |
 | 📦 | **Automatic Restoration** | Externalized files are written on save, so any COMP can be recovered from disk. By default (Export-on-Save) the `.toe` stays authoritative on open; switch to Roundtrip mode to rebuild TDN-strategy COMPs from `.tdn` on every open. |
 | 📤 | **Portable Tox Export** | Pull any COMP out as a self-contained `.tox` with external references stripped. Ship a piece of your project anywhere. |
@@ -199,7 +210,7 @@ For more, see [Troubleshooting](https://dylanroscover.github.io/Embody/embody/tr
 
 ## Version History
 
-See the [full changelog](https://dylanroscover.github.io/Embody/changelog/) for detailed version history.
+See the [full changelog](docs/changelog.md) for detailed version history.
 
 **Recent releases:**
 

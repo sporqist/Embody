@@ -1,54 +1,80 @@
 # Code-Mode Backlog / Known Gaps
 
-Findings from the M1 assessment (2026-07-20). Tagged by where they belong.
-This is the running list of deliberate simplifications + weak spots so nothing
-gets lost between milestones. Update as items land.
+Running list of deferred work + known gaps for the Envoy code-mode surface.
+Current as of build v6.0.142 (M1-M5 shipped). Update as items land.
 
-## Deferred design decisions (bigger; from REVAMP D1/D2/D2a)
+## OPEN -- deferred design decisions (from REVAMP D1/D2/D2a)
 
-- **[settle] Real-frame deferred settle.** M1's `tk.settle` is synchronous
-  force-cook -- it catches compile/cook-time errors (GLSL proven) but NOT
-  feedback-loop or movie-reload delayed errors, which need real frames to pass.
-  D1 wanted true frame advancement. Needs a deferred settle (return None from
-  the handler, chain `run(delayFrames=1)`, push the response via the
-  response_queue when done) -- the run_tests deferred pattern is the model.
-- **[watchdog] Trace-based deadline (D2a).** NOT built. A `while True:` in
-  `code_mode` blocks TD's main thread; the 30s transport timeout frees only the
-  waiter, not the thread. Real TD-freeze risk. D2a wanted a `sys.settrace`
-  coarse-deadline abort with a partial return + `aborted` flag (currently always
-  False). Consider moving this UP -- it is the sharpest safety gap.
+- **[watchdog] Trace-based deadline (D2a) -- SHARPEST GAP.** Not built. A
+  `while True:` in `code_mode` blocks TD's main thread; the 30s transport
+  timeout frees only the waiter, not the thread -- real TD-freeze risk. D2a
+  wanted a `sys.settrace` coarse-deadline abort with a partial return + an
+  `aborted` flag (currently always False). Highest-value safety item.
+- **[settle] Real-frame deferred settle.** `tk.settle` is synchronous
+  force-cook -- catches compile/cook-time errors (GLSL proven) but NOT
+  feedback-loop or movie-reload delayed errors, which need real frames. Needs a
+  deferred settle (handler returns None, chain `run(delayFrames=1)`, push the
+  response via the response_queue when done) -- the run_tests deferred pattern
+  is the model.
 - **[streaming] Progress notifications (D1).** `code_mode` returns one final
   blob; no MCP progress/streaming for long settles.
 - **[remote/auth] (D2).** Bearer token + configurable bind (0.0.0.0 opt-in) for
   remote code execution. Future.
 - **[autosave] Base-COMP interval autosave (D2).** Complements tk.checkpoint.
 
-## M2 scope (tk helper hardening) -- DONE 2026-07-20
+## OPEN -- next up
 
-- [x] **[docstring] Forward-reference** to describe() softened in the tool help.
-- [x] **[tk.make] Default parent** now guards against the bare root and /local
-  (clear error), validates optype with a clear "is it a valid operator type?"
-  message. Covered by tests.
-- [x] **[tk.errors] Richer messages** for unknown optype / off-limits parent.
-- [x] **[glsl scrape]** now reuses the glsl op's already-docked `info` DAT
-  (`_dockedInfoDat`), only creating a throwaway as a fallback -- no mutation in
-  the common read path.
-- [x] **[tk.layout]** added (M2's auto-layout goal): forward-flow row,
-  grid-snapped; `tk.wire(..., layout=True)` invokes it.
+- **[#2 settle] Real-frame settle -- OPT-IN (its own focused pass).** Add an
+  opt-in (`real_frames=N` / settle_mode) that DEFERS code_mode across N real
+  frames (run(delayFrames=1) chain, deliver the response after) to catch
+  feedback/movie-reload delayed errors; keep synchronous force-cook default.
+  Deliberately deferred to a focused effort -- it touches the response-delivery
+  machinery + the 30s watchdog + per-request state; not rushed at a session tail.
+- **[#3 streaming] DEFERRED** until #2 lands (nothing to stream with force-cook).
+- **[agent-contract vs codemode default] test_agent_contract expects the full
+  56-tool inventory, but the surface now DEFAULTS to codemode (3 tools). The
+  tier-1 contract client must SetToolSurface('full') before checking inventory
+  (or expect the 3). Agent tier is opt-in / not in normal runs -- fix when next
+  touching agent tests.
 
-## Test coverage still to add
+## OPEN -- accuracy / polish
+
+- **[docs] mcp-tools-reference is stale** -- see #8 above.
+- **[codemode-only gap] tk has no externalize.** In `codemode` tool-surface,
+  new COMPs from tk.make are NOT auto-externalized (create_op is hidden), so
+  file management regresses vs the 53-tool path. Close with a `tk.externalize()`
+  helper and/or tk.make honoring the Autoexternalize preference.
+
+## DROPPED
+
+- **[#6 docs default-mismatch flag]** -- dropped. #7 made the LIVE default
+  authoritative (fresh-probe eval); parsing wiki defaults is fragile and now
+  low-value. Wiki is for understanding, not defaults.
+
+## DONE
+
+- **[#7 describe docs default]** describe(docs) now reports the fresh probe's
+  eval() as the authoritative default (fixes the TD `Par.default` menu quirk:
+  outTOP filtertype now reports 'nearest', matching a fresh op). Node-side
+  non-default detection left consistent with TD/TDN (isDefault agrees).
+
+## OPEN -- test coverage to add
 
 - `tk.checkpoint` against a REAL TDN-strategy COMP (only the non-TDN no-op path
   is covered).
 - `tk.wire` for 3D COMP connectors (camera/geo/light) via the COMP-connector
   fallback.
 - Watchdog/timeout behavior (once the watchdog exists).
+- More per-optype `describe(node)` summarizers (only math/constant/null tuned;
+  select/noise/transform/level would sharpen large-network mapping).
 
-## Housekeeping
+## DONE (shipped in v6.0.142)
 
-- **[persistence] `project.save()`** to bake the `envoy_codemode` DAT into the
-  `.toe` (bumps 6.141 -> 6.142, re-exports the release `.tox`) so a fresh clone
-  loads `code_mode`. The M1 commit is source-only by design.
-- **[docs] "53 tools" is stale.** `mcp-tools-reference` skill + its template +
-  the changelog omit `code_mode`. Update when the surface stabilizes (after M2,
-  or at the Phase-2 consolidation decision).
+- M1 code_mode; M2 tk hardening (root/local guard, optype validation, clear
+  errors) + tk.layout + docked-GLSL-info reuse.
+- M3 describe (contract/node/network/docs, live+wiki fusion).
+- M4 view (TOP image, CHOP/DAT reduction, relational + temporal diff) + menu
+  transparency (label + options inline).
+- Summary-first describe(node) + sequence collapse (op.seq).
+- M5 tool-surface flag (SetToolSurface 'full'|'codemode').
+- project.save() -> build 6.142 (envoy_codemode baked in); changelog + README.

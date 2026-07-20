@@ -1,10 +1,10 @@
 format: tdn
 version: '2.0'
 build: 1
-generator: Embody/6.0.38
-td_build: 099.2025.32820
-source_file: Embody-6.39.toe
-exported_at: '2026-06-22T03:49:37Z'
+generator: Embody/6.0.141
+td_build: 099.2025.33070
+source_file: Embody-6.142.toe
+exported_at: '2026-07-20T18:37:54Z'
 network_path: /specimen_lab/packet_fabric
 options:
   include_dat_content: false
@@ -16,6 +16,7 @@ type_defaults:
       outputresolution: custom
       resolutionw: =parent().par.Resw.eval()
       resolutionh: =parent().par.Resh.eval()
+      filtertype: linear
       format: rgba16float
     size: [130, 90]
     color: [0.67, 0.67, 0.67]
@@ -25,6 +26,7 @@ type_defaults:
   glslTOP:
     parameters:
       outputresolution: custom
+      filtertype: linear
     size: [130, 90]
     color: [0.67, 0.67, 0.67]
   infoDAT:
@@ -172,6 +174,7 @@ operators:
   type: outTOP
   parameters:
     label: =me.name
+    filtertype: linear
   position: [6000, 0]
   size: [130, 90]
   color: [0.67, 0.67, 0.67]
@@ -196,6 +199,7 @@ operators:
     outputresolution: custom
     resolutionw: =int(parent().par.Resw.eval()/4)
     resolutionh: =int(parent().par.Resh.eval()/4)
+    filtertype: linear
     format: rgba16float
   position: [4200, 0]
   size: [130, 90]
@@ -317,6 +321,7 @@ operators:
     mat: mat_sprite
     resolutionw: =parent().par.Resw.eval()
     resolutionh: =parent().par.Resh.eval()
+    filtertype: linear
     format: rgba16float
   position: [3000, 0]
   size: [130, 90]

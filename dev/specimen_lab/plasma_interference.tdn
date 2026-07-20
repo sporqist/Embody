@@ -1,10 +1,10 @@
 format: tdn
 version: '2.0'
 build: 1
-generator: Embody/6.0.62
-td_build: 099.2025.32820
-source_file: Embody-6.63.toe
-exported_at: '2026-07-01T00:54:31Z'
+generator: Embody/6.0.141
+td_build: 099.2025.33070
+source_file: Embody-6.142.toe
+exported_at: '2026-07-20T18:37:53Z'
 network_path: /specimen_lab/plasma_interference
 options:
   include_dat_content: false
@@ -107,6 +107,7 @@ operators:
   type: outTOP
   parameters:
     label: =me.name
+    filtertype: linear
   flags:
   - display
   position: [800, 0]
@@ -122,6 +123,7 @@ operators:
     outputresolution: custom
     resolutionw: =parent().par.Resw.eval()
     resolutionh: =parent().par.Resh.eval()
+    filtertype: linear
   sequences:
     vec:
     - name: uParams

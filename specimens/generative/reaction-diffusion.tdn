@@ -1,16 +1,18 @@
 format: tdn
 version: '2.0'
 build: 3
-generator: Embody/6.0.39
-td_build: 099.2025.32820
-source_file: Embody-6.39.toe
-exported_at: '2026-06-22T03:49:42Z'
+generator: Embody/6.0.142
+td_build: 099.2025.33070
+source_file: Embody-6.142.toe
+exported_at: '2026-07-20T18:38:03Z'
 network_path: /specimen_lab/reaction_diffusion
 options:
   include_dat_content: true
   include_storage: true
 type_defaults:
   glslTOP:
+    parameters:
+      filtertype: linear
     flags:
     - viewer
     size: [130, 90]
@@ -63,6 +65,7 @@ operators:
     label: =me.name
     resolutionw: =parent().par.Resw.eval()
     resolutionh: =parent().par.Resh.eval()
+    filtertype: linear
   position: [2750, 0]
   size: [130, 90]
   color: [0.67, 0.67, 0.67]
@@ -74,6 +77,7 @@ operators:
     outputresolution: custom
     resolutionw: =parent().par.Resw.eval()
     resolutionh: =parent().par.Resh.eval()
+    filtertype: linear
   position: [2500, 0]
   size: [130, 90]
   color: [0.67, 0.67, 0.67]
@@ -112,6 +116,7 @@ operators:
   type: feedbackTOP
   parameters:
     top: glsl_rd_step
+    filtertype: linear
     format: rgba32float
   flags:
   - viewer

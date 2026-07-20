@@ -1,10 +1,10 @@
 format: tdn
 version: '2.0'
 build: 3
-generator: Embody/6.0.82
-td_build: 099.2025.32820
-source_file: Embody-6.83.toe
-exported_at: '2026-07-03T19:34:10Z'
+generator: Embody/6.0.141
+td_build: 099.2025.33070
+source_file: Embody-6.142.toe
+exported_at: '2026-07-20T18:37:54Z'
 network_path: /specimen_lab/noise_terrain
 options:
   include_dat_content: false
@@ -165,6 +165,7 @@ operators:
   type: outTOP
   parameters:
     label: =me.name
+    filtertype: linear
   flags:
   - display
   position: [1700, 0]
@@ -190,6 +191,7 @@ operators:
   type: compositeTOP
   parameters:
     operand: over
+    filtertype: linear
   position: [1400, 0]
   size: [130, 90]
   color: [0.67, 0.67, 0.67]
@@ -204,6 +206,7 @@ operators:
     outputresolution: custom
     resolutionw: =parent().par.Resw.eval()
     resolutionh: =parent().par.Resh.eval()
+    filtertype: linear
   flags:
   - viewer
   position: [900, -330]
@@ -242,6 +245,7 @@ operators:
     antialias: aa2
     resolutionw: =parent().par.Resw.eval()
     resolutionh: =parent().par.Resh.eval()
+    filtertype: linear
   flags:
   - viewer
   position: [500, 0]

@@ -1,10 +1,10 @@
 format: tdn
 version: '2.0'
 build: 1
-generator: Embody/6.0.63
-td_build: 099.2025.32820
-source_file: Embody-6.63.toe
-exported_at: '2026-07-01T00:54:45Z'
+generator: Embody/6.0.142
+td_build: 099.2025.33070
+source_file: Embody-6.142.toe
+exported_at: '2026-07-20T18:38:05Z'
 network_path: /specimen_lab/mandelbulb_march
 options:
   include_dat_content: true
@@ -117,6 +117,7 @@ operators:
   type: outTOP
   parameters:
     label: =me.name
+    filtertype: linear
   flags:
   - display
   position: [800, 0]
@@ -132,6 +133,7 @@ operators:
     outputresolution: custom
     resolutionw: =parent().par.Resw.eval()
     resolutionh: =parent().par.Resh.eval()
+    filtertype: linear
     format: rgba16float
   sequences:
     vec:

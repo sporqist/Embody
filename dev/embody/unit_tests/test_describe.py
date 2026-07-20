@@ -1,0 +1,133 @@
+"""
+Test suite: describe -- the read-only knowledge & structure tool.
+
+M3 of the code-mode surface. Exercises the four modes (contract / node /
+network / docs) directly via env._describe (deterministic, no MCP transport),
+plus required mode+target validation. Ops are created in self.sandbox so the
+runner's tearDown reaps them.
+"""
+
+runner_mod = op.unit_tests.op('TestRunnerExt').module
+EmbodyTestCase = runner_mod.EmbodyTestCase
+
+
+class TestDescribe(EmbodyTestCase):
+
+    def setUp(self):
+        super().setUp()
+        self.envoy = self.embody.ext.Envoy
+
+    # --- contract -------------------------------------------------------------
+
+    def test_contract_lists_tk_helpers(self):
+        r = self.envoy._describe('contract')
+        self.assertEqual(r['mode'], 'contract')
+        names = [h['name'] for h in r['helpers']]
+        for expected in ('tk.make', 'tk.wire', 'tk.layout', 'tk.settle',
+                         'tk.report'):
+            self.assertIn(expected, names)
+        self.assertTrue(r['fresh_globals'])
+        # signatures are generated from the live Toolkit, so they carry args
+        make = next(h for h in r['helpers'] if h['name'] == 'tk.make')
+        self.assertIn('optype', make['signature'])
+
+    def test_contract_needs_no_target(self):
+        r = self.envoy._describe('contract')
+        self.assertNotIn('error', r)
+
+    # --- node -----------------------------------------------------------------
+
+    def test_node_basic_shape(self):
+        n = self.sandbox.create(nullCHOP, 'ndesc')
+        r = self.envoy._describe('node', n.path)
+        self.assertEqual(r['type'], 'nullCHOP')
+        self.assertEqual(r['family'], 'CHOP')
+        for key in ('customPars', 'nonDefaultPars', 'inputs', 'outputs'):
+            self.assertIn(key, r)
+
+    def test_node_nondefault_par_appears(self):
+        n = self.sandbox.create(nullCHOP, 'nd2')
+        n.par.timeslice = 1
+        r = self.envoy._describe('node', n.path)
+        names = [p['name'] for p in r['nonDefaultPars']]
+        self.assertIn('timeslice', names)
+        tp = next(p for p in r['nonDefaultPars'] if p['name'] == 'timeslice')
+        self.assertIn('default', tp)
+        # A toggle's eval() stringifies to 'True'/'1' depending on TD -- either
+        # is the non-default (on) value.
+        self.assertIn(tp['value'], ('1', 'True'))
+
+    def test_node_custom_par_appears(self):
+        c = self.sandbox.create(baseCOMP, 'cp')
+        page = c.appendCustomPage('X')
+        page.appendFloat('Speed')
+        r = self.envoy._describe('node', c.path)
+        names = [p['name'] for p in r['customPars']]
+        self.assertIn('Speed', names)
+
+    def test_node_missing_target_errors(self):
+        r = self.envoy._describe('node')
+        self.assertIn('error', r)
+
+    def test_node_bad_path_errors(self):
+        r = self.envoy._describe('node', '/no/such/op')
+        self.assertIn('error', r)
+
+    # --- network --------------------------------------------------------------
+
+    def test_network_topology(self):
+        self.sandbox.create(nullCHOP, 'na')
+        self.sandbox.create(nullCHOP, 'nb')
+        r = self.envoy._describe('network', self.sandbox.path)
+        self.assertEqual(r['mode'], 'network')
+        self.assertTrue(r['count'] >= 2)
+        names = [o['name'] for o in r['operators']]
+        self.assertIn('na', names)
+        self.assertIn('nb', names)
+
+    def test_network_sparse_dump(self):
+        self.sandbox.create(nullCHOP, 'nd')
+        r = self.envoy._describe('network', self.sandbox.path, 1, True)
+        self.assertIn('sparse', r)
+        self.assertIsInstance(r['sparse'], dict)
+
+    def test_network_non_comp_errors(self):
+        n = self.sandbox.create(nullCHOP, 'notacomp')
+        r = self.envoy._describe('network', n.path)
+        self.assertIn('error', r)
+
+    # --- docs (live introspection (+) offline-wiki fusion) --------------------
+
+    def test_docs_live_params_authoritative(self):
+        r = self.envoy._describe('docs', 'nullCHOP')
+        self.assertEqual(r.get('optype'), 'nullCHOP')
+        params = r.get('parameters') or []
+        self.assertTrue(len(params) > 0)
+        self.assertIn('name', params[0])
+        self.assertIn('default', params[0])
+        self.assertEqual(r.get('parameterSource'),
+                         'live introspection (running build)')
+
+    def test_docs_wiki_fused_when_mirror_present(self):
+        r = self.envoy._describe('docs', 'noiseTOP')
+        self.assertEqual(r.get('optype'), 'noiseTOP')  # live always present
+        # The offline mirror may be absent on some installs -- assert the wiki
+        # fusion only when it resolved a page.
+        if 'wiki' in r:
+            self.assertTrue(bool(r.get('summary')))
+            self.assertIn('sections_available', r['wiki'])
+
+    def test_docs_unknown_optype_errors(self):
+        r = self.envoy._describe('docs', 'totallyFakeXYZ123')
+        self.assertIn('error', r)
+
+    def test_docs_missing_target_errors(self):
+        r = self.envoy._describe('docs')
+        self.assertIn('error', r)
+
+    # --- validation -----------------------------------------------------------
+
+    def test_unknown_mode_errors(self):
+        r = self.envoy._describe('nonsense')
+        self.assertIn('error', r)
+        self.assertIn('unknown mode', r['error'])

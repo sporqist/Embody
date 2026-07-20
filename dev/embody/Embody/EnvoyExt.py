@@ -810,6 +810,49 @@ class EnvoyMCPServer:
                 'settle_frames': settle_frames,
             })
 
+        @self.mcp.tool()
+        def describe(mode: str, target: str = None, depth: int = 1,
+                     dump: bool = False) -> dict:
+            """
+            Read-only text: the knowledge & structure entry point for code_mode.
+
+            REQUIRED `mode`; `target` is required for every mode except
+            'contract'. No smart dispatch -- pick the mode explicitly.
+
+            Modes:
+              contract  (no target) -- the tk.* code-mode API surface. Read
+                        this once before writing code_mode Python.
+              node      (target = op path) -- one operator in depth: custom
+                        pars + non-default built-in pars, each with live value,
+                        default, mode, and expression; connections; children.
+              network   (target = COMP path, depth=N) -- topology (children,
+                        types, wiring) to depth N. dump=True also embeds a
+                        sparse non-default-only TDN dict for one-read
+                        comprehension of a whole subtree.
+              docs      (target = optype / class / function name) -- FUSED
+                        live introspection (authoritative parameter names +
+                        defaults from the running build) with offline-wiki
+                        prose (Summary + Parameters). "Never guess parameters,
+                        never hallucinate functionality."
+
+            Boundary with `view`: describe gives params + topology + prose
+            (structure); `view` gives actual processed data + pixels.
+
+            Args:
+                mode:   contract | node | network | docs
+                target: op path (node/network) or optype/class/function (docs)
+                depth:  network walk depth (default 1)
+                dump:   network only -- embed the sparse TDN dump
+
+            Returns: a mode-specific dict (see each mode above), or {'error': ...}.
+            """
+            return self._execute_in_td('describe', {
+                'mode': mode,
+                'target': target,
+                'depth': depth,
+                'dump': dump,
+            })
+
         # === Introspection & Diagnostics Tools ===
 
         @self.mcp.tool()
@@ -4236,6 +4279,7 @@ class EnvoyExt:
             'get_connections': self._get_connections,
             'execute_python': self._execute_python,
             'code_mode': self._code_mode,
+            'describe': self._describe,
             # DAT content
             'get_dat_content': self._get_dat_content,
             'set_dat_content': self._set_dat_content,
@@ -5104,6 +5148,12 @@ class EnvoyExt:
         return consolidated diagnostics -- see envoy_codemode."""
         return mod.envoy_codemode.code_mode(self, code, settle_frames)
 
+    def _describe(self, mode: str, target: str = None, depth: int = 1,
+                  dump: bool = False) -> dict:
+        """Read-only describe: contract / node / network / docs -- see
+        envoy_codemode."""
+        return mod.envoy_codemode.describe(self, mode, target, depth, dump)
+
     def _rollbackNewOps(self, pre_paths) -> int:
         """A failed execute_python must not leave a half-built network: destroy
         ops the script created before the exception (documented contract in
@@ -5389,6 +5439,7 @@ class EnvoyExt:
     # omitted so it still prompts. Entries are the tool short-names; the
     # permission strings written are 'mcp__envoy__<name>'.
     READ_ONLY_TOOLS = [
+        'describe',
         'get_td_status', 'get_td_info', 'get_td_classes', 'get_td_class_details',
         'get_op', 'get_op_errors', 'get_op_flags', 'get_op_position',
         'get_op_performance', 'get_project_performance', 'get_parameter',

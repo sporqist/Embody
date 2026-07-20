@@ -38,6 +38,7 @@ EXPECTED_ENVOY_TOOLS = [
     'create_extension',
     'create_op',
     'delete_op',
+    'describe',
     'diff_tdn',
     'disconnect_op',
     'edit_dat_content',

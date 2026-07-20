@@ -41,6 +41,7 @@ later milestone may add a deferred real-frame settle. See td-python.md
 from __future__ import annotations
 
 import io
+import os
 import contextlib
 import time
 import traceback
@@ -611,3 +612,388 @@ def code_mode(ext, code, settle_frames=10):
     if error is None:
         ext._log('code_mode: completed successfully')
     return result
+
+
+# =============================================================================
+# describe -- read-only text: the knowledge & structure entry point
+# =============================================================================
+#
+# One tool, REQUIRED mode + target, NO smart dispatch (D3). Modes:
+#   contract  (no target) -- the tk.* code-mode API surface. Read once.
+#   node      (target=op path) -- one op in depth: params w/ live values +
+#             defaults + is-expression, custom pars, connections, children.
+#   network   (target=path, depth=N) -- topology; optional sparse dump (R4).
+#   docs      (target=optype/class/func) -- FUSED live-introspection + wiki.
+
+_DESCRIBE_MODES = ('contract', 'node', 'network', 'docs')
+
+_CONTRACT_HELPERS = ('make', 'wire', 'layout', 'setp', 'find',
+                     'settle', 'errors', 'checkpoint', 'report')
+
+
+def describe(ext, mode, target=None, depth=1, dump=False):
+    """Read-only text: the knowledge & structure entry point for code_mode.
+
+    Required `mode`; `target` is required for every mode except 'contract'.
+    No smart dispatch -- an ambiguous bare name is never auto-routed.
+    """
+    if mode not in _DESCRIBE_MODES:
+        return {'error': f'describe: unknown mode {mode!r} -- '
+                f'use one of {", ".join(_DESCRIBE_MODES)}'}
+    if mode != 'contract' and not target:
+        return {'error': f"describe(mode={mode!r}) requires target "
+                f'(an op path for node/network, an optype/class/function '
+                f'name for docs)'}
+    try:
+        if mode == 'contract':
+            return _describeContract(ext)
+        if mode == 'node':
+            return _describeNode(ext, target)
+        if mode == 'network':
+            return _describeNetwork(ext, target, depth, dump)
+        if mode == 'docs':
+            return _describeDocs(ext, target)
+    except Exception as e:
+        ext._log(f'describe({mode}) failed: {e}', 'ERROR')
+        return {'error': f'describe({mode}) failed: {e}'}
+
+
+def _describeContract(ext):
+    """The tk.* helper surface, generated from the live Toolkit so it never
+    drifts from the code. Native td + op classes stay the substrate."""
+    import inspect
+    helpers = []
+    for name in _CONTRACT_HELPERS:
+        fn = getattr(_Toolkit, name, None)
+        if fn is None:
+            continue
+        try:
+            sig = str(inspect.signature(fn))
+            sig = sig.replace('(self, ', '(').replace('(self)', '()')
+        except Exception:
+            sig = '(...)'
+        doc = (fn.__doc__ or '').strip().splitlines()
+        summary = doc[0].strip() if doc else ''
+        helpers.append({
+            'name': f'tk.{name}',
+            'signature': f'tk.{name}{sig}',
+            'summary': summary,
+        })
+    return {
+        'mode': 'contract',
+        'summary': 'The tk.* helper namespace injected into code_mode. Native '
+                   'td + op classes remain the substrate; tk adds ergonomic '
+                   'primitives only where native TD is a footgun or the '
+                   'capability does not exist natively.',
+        'fresh_globals': True,
+        'substrate': 'op, ops, parent, root, me, td, and all td.* names '
+                     '(operator type names, tdu, classes) are in scope.',
+        'helpers': helpers,
+        'notes': [
+            'Fresh globals every call -- nothing persists between calls; keep '
+            'persistent state in the TD project.',
+            'code_mode auto-settles ~10 cook frames after your code and returns '
+            'consolidated diagnostics; call tk.settle(n) mid-code to sample '
+            'earlier.',
+            'Return data with tk.report(obj); it rides back separate from '
+            'stdout.',
+        ],
+    }
+
+
+def _describeNode(ext, target):
+    """One op in depth: type/family, custom pars (all) + non-default built-in
+    pars, each with live value + default + mode + expression, plus connections
+    and children. The structure counterpart to `view` (which shows data)."""
+    o = op(target)
+    if o is None:
+        return {'error': f'Operator not found: {target}'}
+
+    def _par_entry(p):
+        entry = {'name': p.name, 'label': p.label}
+        try:
+            entry['value'] = str(p.eval())
+        except Exception:
+            entry['value'] = 'N/A'
+        try:
+            entry['default'] = str(p.default)
+        except Exception:
+            entry['default'] = None
+        try:
+            entry['mode'] = p.mode.name
+        except Exception:
+            entry['mode'] = str(getattr(p, 'mode', ''))
+        if entry['mode'] == 'EXPRESSION':
+            try:
+                entry['expr'] = p.expr
+            except Exception:
+                pass
+        return entry
+
+    custom_pars = []
+    builtin_nondefault = []
+    for p in o.pars():
+        try:
+            is_custom = bool(p.isCustom)
+        except Exception:
+            is_custom = False
+        if is_custom:
+            custom_pars.append(_par_entry(p))
+            continue
+        # Built-in: keep only non-default (value or an active expression/bind).
+        try:
+            mode_name = p.mode.name
+        except Exception:
+            mode_name = 'CONSTANT'
+        keep = mode_name != 'CONSTANT'
+        if not keep:
+            try:
+                keep = p.val != p.default
+            except Exception:
+                keep = False
+        if keep:
+            builtin_nondefault.append(_par_entry(p))
+
+    info = {
+        'mode': 'node',
+        'path': o.path,
+        'name': o.name,
+        'type': o.OPType,
+        'family': o.family,
+        'customPars': custom_pars,
+        'nonDefaultPars': builtin_nondefault,
+        'inputs': [i.path if i else None for i in o.inputs],
+        'outputs': [i.path if i else None for i in o.outputs],
+    }
+    try:
+        info['tags'] = sorted(o.tags)
+    except Exception:
+        pass
+    if hasattr(o, 'children'):
+        info['children'] = [c.name for c in o.children]
+        info['childCount'] = len(info['children'])
+    return info
+
+
+def _describeNetwork(ext, target, depth=1, dump=False):
+    """Topology of a COMP: children (path/type/family/inputs) walked to
+    `depth`. With dump=True, also embed a sparse non-default-only TDN dict
+    (via read_tdn) for whole-network comprehension in one read (R4). Breadth,
+    not per-op depth -- use describe(node) for one op's params."""
+    comp = op(target)
+    if comp is None:
+        return {'error': f'Operator not found: {target}'}
+    # Non-COMPs also expose an (empty) .children, so hasattr is not a COMP
+    # test -- use isCOMP.
+    if not getattr(comp, 'isCOMP', False):
+        return {'error': f'{target} is not a COMP ({comp.OPType})'}
+
+    try:
+        d = max(1, int(depth))
+    except Exception:
+        d = 1
+
+    total = [0]
+
+    def walk(c, remaining):
+        out = []
+        for child in c.children:
+            total[0] += 1
+            node = {
+                'path': child.path,
+                'name': child.name,
+                'type': child.OPType,
+                'family': child.family,
+            }
+            ins = [i.path for i in child.inputs if i]
+            if ins:
+                node['inputs'] = ins
+            kids = getattr(child, 'children', None)
+            if kids:
+                node['childCount'] = len(kids)
+                if remaining > 1:
+                    node['children'] = walk(child, remaining - 1)
+            out.append(node)
+        return out
+
+    operators = walk(comp, d)
+    result = {
+        'mode': 'network',
+        'path': comp.path,
+        'type': comp.OPType,
+        'depth': d,
+        'count': total[0],
+        'operators': operators,
+    }
+    if dump:
+        try:
+            tdn = mod.envoy_read.read_tdn(ext, comp_path=comp.path,
+                                          max_depth=d)
+            if isinstance(tdn, dict) and 'error' in tdn:
+                result['sparse_error'] = tdn['error']
+            else:
+                result['sparse'] = tdn
+        except Exception as e:
+            result['sparse_error'] = f'sparse dump failed: {e}'
+    return result
+
+
+def _describeDocs(ext, target):
+    """FUSE live introspection (truth) with offline-wiki prose (understanding)
+    for an operator type. Live parameter names + defaults come from a transient
+    probe instance (authoritative, matches the running build); the wiki page
+    supplies the Summary + Parameters prose. This is the code-mode edge over
+    the fork's separate introspection / get_docs tools.
+    """
+    live, live_err = _liveOptypeInfo(ext, target)
+    wiki = _offlineWikiPage(ext, target)
+    if not live and not wiki:
+        note = f' ({live_err})' if live_err else ''
+        return {'error': f'describe(docs): no live optype and no offline wiki '
+                f'page matched {target!r}{note}'}
+
+    result = {'mode': 'docs', 'target': target}
+    if live:
+        result['optype'] = live['optype']
+        result['family'] = live['family']
+        result['pythonClass'] = live['pythonClass']
+        result['parameters'] = live['parameters']       # authoritative
+        result['parameterSource'] = 'live introspection (running build)'
+    elif live_err:
+        result['live_note'] = f'no live instance introspected: {live_err}'
+
+    if wiki:
+        secs = wiki['sections']
+        summary = (secs.get('summary') or '').strip()
+        if summary:
+            result['summary'] = summary[:1500]
+        # Operator pages split parameters across multiple "Parameters - X Page"
+        # sections (Noise/Transform/Output/Common), not a single 'Parameters'
+        # one -- gather them all in page order.
+        param_keys = sorted(k for k in secs if k.startswith('parameters'))
+        params_prose = '\n\n'.join(secs[k].strip() for k in param_keys
+                                   if secs[k].strip())
+        if params_prose:
+            result['wiki_parameters'] = params_prose[:5000]
+            if len(params_prose) > 5000:
+                result['wiki_parameters_truncated'] = True
+        result['wiki'] = {
+            'title': wiki['title'],
+            'file': wiki['file'],
+            'source': 'offline mirror',
+            'sections_available': wiki['sections_available'],
+        }
+    else:
+        result['wiki_note'] = 'no offline wiki page matched'
+
+    result['fusion_note'] = (
+        'Live parameters + defaults are authoritative (they match the running '
+        'build); wiki prose is for understanding. Automated per-parameter '
+        'wiki-vs-live default mismatch flagging is a planned enhancement.')
+    return result
+
+
+def _liveOptypeInfo(ext, optype):
+    """Authoritative parameter list + defaults for an operator TYPE, read from
+    a TRANSIENT probe instance (created in a scratch COMP, destroyed
+    immediately). Returns (info, None) or (None, error_string).
+
+    Uses raw .create() (NOT create_op) so it never auto-externalizes. The
+    scratch holder is always torn down."""
+    try:
+        home = op.Embody.parent()
+    except Exception:
+        home = None
+    if home is None or not hasattr(home, 'create'):
+        return None, 'no scratch home to probe in'
+    holder = None
+    try:
+        holder = home.create('baseCOMP')
+        try:
+            probe = holder.create(optype)
+        except Exception as e:
+            return None, f'{optype!r} is not a creatable operator type ({e})'
+        pars = []
+        for p in probe.pars():
+            entry = {'name': p.name, 'label': p.label}
+            try:
+                entry['default'] = str(p.default)
+            except Exception:
+                entry['default'] = None
+            try:
+                entry['style'] = str(p.style)
+            except Exception:
+                pass
+            try:
+                if p.isMenu and p.menuNames:
+                    entry['menu'] = list(p.menuNames)
+            except Exception:
+                pass
+            pars.append(entry)
+        return {
+            'optype': probe.OPType,
+            'family': probe.family,
+            'pythonClass': type(probe).__name__,
+            'parameters': pars,
+        }, None
+    except Exception as e:
+        return None, str(e)
+    finally:
+        if holder is not None:
+            try:
+                holder.destroy()
+            except Exception:
+                pass
+
+
+def _offlineWikiPage(ext, query):
+    """Resolve + parse the offline-wiki page for `query` on the MAIN thread
+    (the ext's _docsOffline round-trips through _execute_in_td and would
+    deadlock here). Returns a parsed page dict or None. Normalization strips
+    non-alphanumerics + lowercases, so an optype ('moviefileinTOP') matches its
+    wiki file ('Movie_File_In_TOP.htm')."""
+    # The offline-wiki text helpers are static methods on the EnvoyMCPServer
+    # class (worker-side), NOT on the EnvoyExt instance we get here -- reach
+    # them via the sibling module's class. _get_docs_roots IS on EnvoyExt.
+    try:
+        srv = mod.EnvoyExt.EnvoyMCPServer
+    except Exception:
+        return None
+    try:
+        roots = (ext._get_docs_roots() or {}).get('roots', [])
+    except Exception:
+        return None
+    root = next((r for r in roots if os.path.isdir(r)), None)
+    if not root:
+        return None
+    try:
+        index = {}
+        for fn in os.listdir(root):
+            if not fn.lower().endswith(('.htm', '.html')):
+                continue
+            key = srv._docsNormalize(os.path.splitext(fn)[0])
+            if key and key not in index:
+                index[key] = fn
+    except Exception:
+        return None
+    key = srv._docsNormalize(query)
+    if not key:
+        return None
+    fn = index.get(key)
+    if fn is None:
+        cands = [f for k, f in index.items() if key in k or k in key]
+        if len(cands) == 1:
+            fn = cands[0]
+    if fn is None:
+        return None
+    try:
+        with open(os.path.join(root, fn), encoding='utf-8',
+                  errors='replace') as f:
+            html = f.read()
+        text = srv._docsHtmlToText(html)
+        available, sections = srv._docsSplitSections(text)
+        return {'title': os.path.splitext(fn)[0].replace('_', ' '),
+                'file': fn, 'sections_available': available,
+                'sections': sections}
+    except Exception:
+        return None

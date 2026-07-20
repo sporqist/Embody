@@ -212,3 +212,65 @@ class TestCodeMode(EmbodyTestCase):
         result = self.envoy._code_mode(code='pass', settle_frames=3)
         self.assertTrue(result['success'])
         self.assertEqual(result['settled_frames'], 3)
+
+    # --- M2: make robustness / guards -----------------------------------------
+
+    def test_make_refuses_bare_root(self):
+        result = self.envoy._code_mode(code="tk.make('nullCHOP', 'x', parent='/')")
+        self.assertFalse(result['success'])
+        self.assertIn('off-limits', result['error'])
+
+    def test_make_unknown_optype_is_clear(self):
+        code = "tk.make('totallyFakeTOP', 'x', parent={sb!r})".format(sb=self.sb)
+        result = self.envoy._code_mode(code=code)
+        self.assertFalse(result['success'])
+        self.assertIn('totallyFakeTOP', result['error'])
+        self.assertIn('valid operator type', result['error'])
+
+    # --- M2: tk.layout / wire layout ------------------------------------------
+
+    def test_layout_forward_flow(self):
+        code = (
+            "a = tk.make('nullCHOP', 'la', parent={sb!r})\n"
+            "b = tk.make('nullCHOP', 'lb', parent={sb!r})\n"
+            "c = tk.make('nullCHOP', 'lc', parent={sb!r})\n"
+            "tk.layout(a, b, c)\n"
+            "tk.report({{'ax': a.nodeX, 'aw': a.nodeWidth, 'ay': a.nodeY,\n"
+            "            'bx': b.nodeX, 'bw': b.nodeWidth, 'by': b.nodeY,\n"
+            "            'cx': c.nodeX, 'cy': c.nodeY}})\n"
+        ).format(sb=self.sb)
+        result = self.envoy._code_mode(code=code)
+        self.assertTrue(result['success'], result.get('error', ''))
+        r = result['report']
+        # Same row, strictly forward flow (each right edge left of the next).
+        self.assertEqual(r['ay'], r['by'])
+        self.assertEqual(r['by'], r['cy'])
+        self.assertTrue(r['ax'] + r['aw'] <= r['bx'],
+                        'op a overlaps/behind b after layout')
+        self.assertTrue(r['bx'] + r['bw'] <= r['cx'],
+                        'op b overlaps/behind c after layout')
+
+    def test_wire_with_layout(self):
+        code = (
+            "a = tk.make('constantCHOP', 'wa', parent={sb!r})\n"
+            "b = tk.make('nullCHOP', 'wb', parent={sb!r})\n"
+            "tk.wire(a, b, layout=True)\n"
+            "tk.report({{'ax': a.nodeX, 'aw': a.nodeWidth, 'ay': a.nodeY,\n"
+            "            'bx': b.nodeX, 'by': b.nodeY}})\n"
+        ).format(sb=self.sb)
+        result = self.envoy._code_mode(code=code)
+        self.assertTrue(result['success'], result.get('error', ''))
+        r = result['report']
+        self.assertEqual(r['ay'], r['by'])
+        self.assertTrue(r['ax'] + r['aw'] <= r['bx'])
+
+    # --- M2: checkpoint safe no-op on a non-TDN op ----------------------------
+
+    def test_checkpoint_non_tdn_is_safe_noop(self):
+        code = (
+            "b = tk.make('nullCHOP', 'ckpt', parent={sb!r})\n"
+            "tk.report(tk.checkpoint(b))\n"
+        ).format(sb=self.sb)
+        result = self.envoy._code_mode(code=code)
+        self.assertTrue(result['success'], result.get('error', ''))
+        self.assertFalse(result['report']['checkpointed'])

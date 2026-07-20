@@ -775,11 +775,13 @@ class EnvoyMCPServer:
             the operators you touched and the response carries any errors,
             warnings, and GLSL shader-compile logs that surfaced.
 
-            The `tk` namespace (call describe(mode='contract') for full detail):
+            The `tk` namespace:
               tk.make(optype, name=None, parent=None, **pars) -> op
                   create + auto-position + hug docked companions + set pars.
-              tk.wire(*ops, source_index=0, dest_index=0) -> [(src,dst), ...]
-                  chain-connect via primary connectors (accepts ops or paths).
+              tk.wire(*ops, source_index=0, dest_index=0, layout=False)
+                  chain-connect via primary connectors (accepts ops or paths);
+                  layout=True also arranges the chain left-to-right.
+              tk.layout(*ops, dx_gap=200) -> ops   arrange in a forward-flow row.
               tk.setp(op, **pars) -> op   batch-set params (clear error on typo).
               tk.find(pattern, type=None, parent=None, depth=None) -> [op, ...]
               tk.settle(frames=10, targets=None) -> diagnostics

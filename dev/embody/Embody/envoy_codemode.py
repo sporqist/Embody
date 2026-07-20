@@ -121,9 +121,24 @@ class _Toolkit:
         if not hasattr(parent_comp, 'create'):
             raise ValueError(
                 f'tk.make: parent {parent_comp.path} is not a COMP')
+        # Never build at the bare root or in volatile /local (CLAUDE.md rule):
+        # /local is not saved with the .toe, and the root '/' is not a home.
+        ppath = parent_comp.path
+        if ppath == '/' or ppath == '/local' or ppath.startswith('/local/'):
+            raise ValueError(
+                f'tk.make: refusing to create in {ppath} -- the bare root and '
+                '/local are off-limits (/local is not saved with the .toe). '
+                'Pass parent=<a real COMP>.')
 
-        new_op = (parent_comp.create(optype, name) if name
-                  else parent_comp.create(optype))
+        optype_name = (optype if isinstance(optype, str)
+                       else getattr(optype, '__name__', str(optype)))
+        try:
+            new_op = (parent_comp.create(optype, name) if name
+                      else parent_comp.create(optype))
+        except Exception as e:
+            raise ValueError(
+                f'tk.make: could not create a {optype_name!r} in '
+                f'{ppath} -- {e} (is {optype_name!r} a valid operator type?)')
         # Reuse Envoy's proven layout helpers (position clear of real siblings,
         # then hug any docked callback/shader/info DATs below the host).
         try:
@@ -138,13 +153,16 @@ class _Toolkit:
         self._watch(new_op)
         return new_op
 
-    def wire(self, *targets, source_index=0, dest_index=0):
+    def wire(self, *targets, source_index=0, dest_index=0, layout=False):
         """Chain-connect operators left to right in one call.
 
         tk.wire(a, b, c) connects a -> b -> c using each op's PRIMARY
         connectors, removing the outputConnectors[0]/inputConnectors[0] index
         footguns. Accepts ops or path strings. COMP-only operators (no
         data-flow connectors) fall back to their COMP connectors.
+
+        layout=True also arranges the chain left-to-right (see tk.layout) so the
+        wires read as forward flow.
 
         Returns a list of (source_path, dest_path) tuples actually connected.
         Raises a clear error if a pair cannot be wired.
@@ -158,7 +176,36 @@ class _Toolkit:
             made.append((src.path, dst.path))
             self._watch(src)
             self._watch(dst)
+        if layout:
+            self.layout(*ops)
         return made
+
+    def layout(self, *targets, dx_gap=200, row_y=None):
+        """Arrange operators left-to-right in one row so a chain reads as
+        forward flow (each op's right edge left of the next op's left edge).
+
+        Positions are anchored at the FIRST op's current spot (or `row_y` for
+        the shared Y). Each step = that op's nodeWidth + dx_gap, snapped up to
+        the 200-unit grid (network-layout.md). Docked companions are re-hugged
+        after each move. Accepts ops or path strings; returns the ops.
+        """
+        ops = [self._resolve(t, 'layout target') for t in targets]
+        if not ops:
+            return ops
+        x = ops[0].nodeX
+        y = ops[0].nodeY if row_y is None else row_y
+        for o in ops:
+            o.nodeX = x
+            o.nodeY = y
+            step = int(o.nodeWidth) + int(dx_gap)
+            step = ((step + 199) // 200) * 200      # snap up to the 200 grid
+            x += step
+            try:
+                self._ext._placeDockedOps(o)         # keep docks hugging
+            except Exception:
+                pass
+            self._watch(o)
+        return ops
 
     def _connectPair(self, src, dst, source_index, dest_index):
         out_conns = getattr(src, 'outputConnectors', None)
@@ -397,8 +444,8 @@ def _glslOpsInScope(targets, recurse):
 
 
 def _glslCompileDiagnostics(ext, glsl_op):
-    """Scrape shader-compile errors from a temporary Info DAT pointed at a
-    GLSL op. Returns a list of error entries. Never raises, always cleans up.
+    """Scrape shader-compile errors from an Info DAT pointed at a GLSL op.
+    Returns a list of error entries. Never raises.
 
     Verified against live TD 2025.33070: a GLSL op with a compile error reports
     NOTHING via op.errors() -- only op.warnings() ("has compile errors (Use Info
@@ -406,19 +453,25 @@ def _glslCompileDiagnostics(ext, glsl_op):
     in the Info DAT as a SINGLE multi-line text cell (not [label, value] rows).
     So we read the Info DAT's whole .text and pull out the ERROR lines; a clean
     "Compiled Successfully" log contains no 'error' and yields nothing.
+
+    A GLSL op already DOCKS its own info DAT (type 'info') -- prefer that (a
+    read, no mutation) and only create a throwaway Info DAT as a fallback.
     """
     entries = []
-    parent_comp = glsl_op.parent()
-    if parent_comp is None or not hasattr(parent_comp, 'create'):
-        return entries
-    info = None
+    docked_info = _dockedInfoDat(glsl_op)
+    temp = None
     try:
-        info = parent_comp.create('infoDAT')
-        # Point the Info DAT at the GLSL op (sibling reference by name).
-        try:
-            info.par.op = glsl_op.name
-        except Exception:
-            return entries
+        info = docked_info
+        if info is None:
+            parent_comp = glsl_op.parent()
+            if parent_comp is None or not hasattr(parent_comp, 'create'):
+                return entries
+            temp = parent_comp.create('infoDAT')
+            try:
+                temp.par.op = glsl_op.name   # sibling reference by name
+            except Exception:
+                return entries
+            info = temp
         info.cook(force=True)
         text = info.text or ''
         low = text.lower()
@@ -438,12 +491,24 @@ def _glslCompileDiagnostics(ext, glsl_op):
         ext._log(f'GLSL diagnostics scrape failed for {glsl_op.path}: {e}',
                  'DEBUG')
     finally:
-        if info is not None:
+        if temp is not None:
             try:
-                info.destroy()
+                temp.destroy()
             except Exception:
                 pass
     return entries
+
+
+def _dockedInfoDat(host):
+    """The host op's docked Info DAT (type 'info'), or None. GLSL ops dock one
+    already, so we can read compile results without creating anything."""
+    try:
+        for d in host.docked:
+            if getattr(d, 'valid', False) and d.type == 'info':
+                return d
+    except Exception:
+        pass
+    return None
 
 
 # =============================================================================

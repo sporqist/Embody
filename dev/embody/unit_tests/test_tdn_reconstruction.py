@@ -1082,13 +1082,31 @@ class TestTDNReconstruction(EmbodyTestCase):
 		self.assertIsNotNone(rd)
 
 	def test_G06_content_excluded_toggle(self):
-		"""DAT content excluded when include_dat_content=False."""
+		"""A file-BACKED DAT's content is excluded when the flag is False.
+
+		Contract: the flag means "skip content already saved elsewhere", not
+		"throw code away" -- an unbacked DAT is always embedded because
+		nothing else holds its code.
+		"""
+		import os
 		d = self.sandbox.create(textDAT, 'd')
 		d.text = 'should not appear'
-		orig = self.tdn.ExportNetwork(
-			root_path=self.sandbox.path, include_dat_content=False)
-		entry = orig['tdn']['operators'][0]
-		self.assertNotIn('dat_content', entry)
+		path = os.path.join(project.folder, 'embody', 'unit_tests',
+							'_test_temp', 'g06_backing.txt')
+		os.makedirs(os.path.dirname(path), exist_ok=True)
+		with open(path, 'w', encoding='utf-8', newline='') as f:
+			f.write(d.text)
+		d.par.file = path
+		try:
+			orig = self.tdn.ExportNetwork(
+				root_path=self.sandbox.path, include_dat_content=False)
+			# Match by name rather than index -- position is incidental.
+			entry = next(o for o in orig['tdn']['operators']
+						 if o.get('name') == 'd')
+			self.assertNotIn('dat_content', entry)
+		finally:
+			if os.path.exists(path):
+				os.remove(path)
 
 	# =================================================================
 	# H. Deep Nesting (5 tests)

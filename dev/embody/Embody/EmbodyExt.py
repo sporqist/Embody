@@ -6442,14 +6442,29 @@ class EmbodyExt:
             node = node.parent()
 
         # Boundary: if any ancestor COMP is already externalized, this op is
-        # already captured by that ancestor's .tdn/.tox -- don't double-manage
+        # normally captured by that ancestor's .tdn/.tox -- don't double-manage
         # (and don't collide with the TDN parent/child model).
+        #
+        # ONE EXCEPTION -- a DAT under a TDN ancestor. A .tdn captures a DAT's
+        # CONTENT only when embedding is on for that COMP; with embedding off
+        # (the default) it stores structure only, so skipping here would leave
+        # the DAT's code with no home at all. That is exactly how a crash cost
+        # one project every shader and callback: the .tdn held 185 operators
+        # and zero lines of code. Tagging instead gives the DAT its own .py --
+        # which the .tdn then REFERENCES rather than embeds (import Phase 8
+        # restores the file link), the same shape Embody's own COMPs use.
+        # A .tox is a full binary snapshot and always captures its contents,
+        # so that skip stands unconditionally.
         tox_tag = self.my.par.Toxtag.val
         tdn_tag = self.my.par.Tdntag.val
         ancestor = oper.parent()
         while ancestor is not None and ancestor.path != '/':
-            if (tox_tag in ancestor.tags or tdn_tag in ancestor.tags
-                    or self._findExternalizedComp(ancestor.path)):
+            is_tox = tox_tag in ancestor.tags
+            is_tdn = tdn_tag in ancestor.tags
+            if is_tox or is_tdn or self._findExternalizedComp(ancestor.path):
+                if (oper.family == 'DAT' and is_tdn and not is_tox
+                        and not self._compEmbedsDATs(ancestor)):
+                    break  # this .tdn will not hold the code -- give it a file
                 return None
             ancestor = ancestor.parent()
 
@@ -6460,6 +6475,22 @@ class EmbodyExt:
         if tag in oper.tags:
             return None
         return tag
+
+    def _compEmbedsDATs(self, comp: OP) -> bool:
+        """Whether a TDN COMP's export will embed DAT content.
+
+        Resolves the same way TDNExt.ExportNetwork does: the per-COMP
+        `embed_dats_in_tdn` storage override if present, else the global
+        Embeddatsintdns preference. Used to decide whether that .tdn actually
+        holds a descendant DAT's code, or only its structure.
+        """
+        try:
+            per_comp = comp.fetch('embed_dats_in_tdn', None, search=False)
+            if per_comp is not None:
+                return bool(per_comp)
+            return bool(self.my.par.Embeddatsintdns.eval())
+        except Exception:
+            return False  # unknown -> assume NOT captured, so the DAT is tagged
 
     def _scheduleAutoExternalizeFlush(self) -> None:
         """Coalesce loose-DAT externalization into one settle-debounced Update().
@@ -7685,6 +7716,7 @@ class EmbodyExt:
         'ndi',            # Discovered NDI sources
         'mpcdi',          # Calibration data parsed from .mpcdi
         'indices',        # Generated number series
+        'fifo',           # Rolling runtime buffer (maxlines-capped log)
     }
 
     def _findAtRiskDATs(self) -> list:

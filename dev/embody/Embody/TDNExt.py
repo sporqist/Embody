@@ -1058,6 +1058,13 @@ class TDNExt:
 			self._seq_default_blocks_cache.clear()
 			operators = self._exportChildren(root_op, options, depth=0)
 
+			# Loud warning when this export DROPPED code that nothing else
+			# holds. A DAT with its own externalized file is fine (the .py IS
+			# the source of truth); a DAT without one exists only here, so
+			# include_dat_content=False discards it permanently while the
+			# externalization UI still shows a green "Saved" timestamp.
+			self._warnDroppedDATs(root_path, options)
+
 			# Post-processing optimizations
 			type_defaults = TDNExt._compute_type_defaults(operators)
 			if type_defaults:
@@ -1529,6 +1536,11 @@ class TDNExt:
 			state['index'] = batch_end
 
 			if batch_end >= len(paths):
+				# Same dropped-code warning as the sync path: the async walk
+				# shares _exportSingleOp, so state['options'] has accumulated
+				# the identical collector.
+				self._warnDroppedDATs(state['root_path'], state['options'])
+
 				# Collect annotations on main thread before signaling worker
 				ann_results = {}
 				root_op = op(state['root_path'])
@@ -2361,15 +2373,43 @@ class TDNExt:
 		# attributes tableDATs hold all keyframe data -- must always be saved).
 		# Skip content for read-only DATs (e.g. glsl1_info, popto1) --
 		# TD auto-generates their content and rejects writes on import.
+		# Embed DAT content when the option asks for it, when the DAT lives in
+		# an animationCOMP (keyframe data must always survive), OR when the DAT
+		# has no externalized file of its own.
+		#
+		# That last clause is the data-safety rule: `include_dat_content=False`
+		# means "skip content that is ALREADY saved elsewhere", never "throw
+		# code away". A DAT with a .py on disk is safe and omitting it avoids
+		# duplication; a DAT with NO file exists ONLY inside this document, so
+		# omitting it is silent, permanent loss -- and the externalization UI
+		# still shows a green "Saved". (Field report 2026-07-21 section 2.2: a
+		# crash cost a project every shader and callback exactly that way.)
 		if target.family == 'DAT' and (
 				options.get('include_dat_content', True) or
-				self._isInsideAnimationCOMP(target)):
+				self._isInsideAnimationCOMP(target) or
+				self._isUnbackedDAT(target)):
 			if self._isDATEditable(target):
 				content_data = self._exportDATContent(target)
 				if content_data:
 					data.update(content_data)
 			else:
 				data['dat_read_only'] = True
+		elif target.family == 'DAT' and self._isDATEditable(target):
+			# Reached only for DATs that ARE backed by an externalized file
+			# (unbacked ones took the branch above). Recorded for accounting;
+			# the 'unbacked' bucket is now an invariant guard that should stay
+			# empty -- if it ever fills, the rule above has regressed.
+			try:
+				has_content = bool(
+					target.text.strip() if not target.isTable
+					else target.numRows)
+			except Exception:
+				has_content = False
+			if has_content:
+				bucket = 'backed' if not self._isUnbackedDAT(target) else 'unbacked'
+				options.setdefault(
+					'_dropped_dats', {'backed': [], 'unbacked': []})
+				options['_dropped_dats'][bucket].append(target.path)
 
 		# Emit child-reference metadata for COMPs whose contents are
 		# managed by a separate file (TDN/TOX externalization, or a
@@ -3553,9 +3593,84 @@ class TDNExt:
 			self._log(f'Error reading DAT content from {target.path}: {e}', 'DEBUG')
 		return None
 
-	# =========================================================================
-	# IMPORT INTERNALS
-	# =========================================================================
+	def _isUnbackedDAT(self, target):
+		"""True if this DAT holds authored content that exists ONLY here.
+
+		Such content must be embedded regardless of the include_dat_content
+		option -- otherwise a rebuild from the .tdn silently loses it.
+
+		Two kinds of DAT are deliberately NOT "unbacked", because omitting
+		their content loses nothing:
+
+		- TD-managed types: content TouchDesigner derives from inputs,
+		  parameters, or runtime state and regenerates on cook. Embedding it
+		  would serialize transient state into a version-controlled file --
+		  Embody's own fifoDAT log added 117 lines of timestamped log spam to
+		  Embody.tdn and would churn it on every save. This reuses the SAME
+		  canonical set the save-time at-risk check uses
+		  (EmbodyExt._TD_MANAGED_DAT_TYPES) rather than a parallel list, so
+		  the two features can never disagree about what counts as authored.
+		  Note that set deliberately EXCLUDES callback DATs (execute, parexec,
+		  keyboardin, oscin, ...): those hold user-authored Python and must
+		  stay protected.
+		- DATs fed by an input: their content is computed from upstream, so
+		  it reappears on the next cook.
+		"""
+		try:
+			# Short form ('info', not 'infoDAT') -- the set's own convention.
+			managed = self.ownerComp.ext.Embody._TD_MANAGED_DAT_TYPES
+			if target.type in managed:
+				return False
+		except Exception:
+			pass
+		try:
+			if any(c is not None for c in target.inputs):
+				return False  # derived from upstream -- recomputed on cook
+		except Exception:
+			pass
+		try:
+			return not bool(target.par.file.eval())
+		except Exception:
+			# No `file` parameter at all -- nothing on disk holds this
+			# content, so treat it as unbacked and embed it.
+			return True
+
+	def _warnDroppedDATs(self, root_path, options):
+		"""Warn when an export dropped DAT code that nothing else persists.
+
+		`include_dat_content=False` is legitimate for DATs that carry their own
+		externalized file -- the .py on disk is the source of truth and
+		embedding would only duplicate it. It is data loss for a DAT with no
+		file link: this export was the only place that code would have lived.
+
+		Reports the two buckets separately so the message is actionable rather
+		than alarming: N safely on disk vs N with no persistence path at all.
+		"""
+		dropped = options.get('_dropped_dats')
+		if not dropped:
+			return
+		unbacked = dropped.get('unbacked') or []
+		backed = dropped.get('backed') or []
+		if not unbacked:
+			# Everything dropped is externalized elsewhere -- nothing lost.
+			if backed:
+				self._log(
+					f'TDN export of {root_path}: DAT content omitted for '
+					f'{len(backed)} externalized DAT(s) -- their .py files on '
+					f'disk remain the source of truth.', 'DEBUG')
+			return
+
+		preview = ', '.join(unbacked[:5])
+		more = f' (+{len(unbacked) - 5} more)' if len(unbacked) > 5 else ''
+		self._log(
+			f'{len(unbacked)} DAT(s) in {root_path} have no externalized file '
+			f'of their own, so this export is the only copy of their content. '
+			f'Recommended: externalize them -- tag each with the DAT source '
+			f'tag (MCP: tk.externalize(op), or the tagger) and Embody writes '
+			f'the code to a .py you can diff and edit. Embedding in the .tdn '
+			f'("Embed DATs" / Embeddatsintdns, or the per-COMP override) also '
+			f'preserves it, but a YAML blob is harder to read and diff than a '
+			f'real source file. Affected: {preview}{more}', 'WARNING')
 
 	def _resolveOp(self, parent, op_def):
 		"""Get the actual created operator for an op_def.

@@ -96,9 +96,44 @@ class TestAutoExternalize(EmbodyTestCase):
         # Raw tag add (no export) to simulate an already-externalized ancestor.
         parent.tags.add(self.embody.par.Tdntag.val)
         child = parent.create('baseCOMP', 'ae_child')
-        child_dat = parent.create('textDAT', 'ae_child_dat')
         self.assertIsNone(self._decide(child))
+
+        # A DAT is skipped only when that .tdn genuinely captures its CONTENT,
+        # i.e. when embedding is on for the COMP.
+        parent.store('embed_dats_in_tdn', True)
+        child_dat = parent.create('textDAT', 'ae_child_dat')
         self.assertIsNone(self._decide(child_dat))
+
+    def test_dat_under_non_embedding_tdn_ancestor_is_tagged(self):
+        """A .tdn with embedding OFF stores structure only.
+
+        Skipping the DAT there would leave its code with no home at all --
+        exactly how a crash cost one project every shader and callback (the
+        .tdn held 185 operators and zero lines of code). Tagging gives the DAT
+        its own .py, which the .tdn then references instead of embedding.
+        """
+        self.embody.par.Autoexternalize = 'both'
+        parent = self._box.create('baseCOMP', 'ae_tdn_noembed')
+        parent.tags.add(self.embody.par.Tdntag.val)
+        parent.store('embed_dats_in_tdn', False)
+
+        d = parent.create('textDAT', 'ae_noembed_dat')
+        self.assertEqual(self._decide(d), 'py',
+                         'a DAT whose .tdn will not embed its content must be '
+                         'externalized to its own file')
+        # A COMP child is still captured structurally -> still skipped.
+        c = parent.create('baseCOMP', 'ae_noembed_comp')
+        self.assertIsNone(self._decide(c))
+
+    def test_dat_under_tox_ancestor_always_skipped(self):
+        """A .tox is a full binary snapshot -- it always captures its DATs,
+        regardless of any DAT-embedding preference."""
+        self.embody.par.Autoexternalize = 'both'
+        parent = self._box.create('baseCOMP', 'ae_tox_noembed')
+        parent.tags.add(self.embody.par.Toxtag.val)
+        parent.store('embed_dats_in_tdn', False)
+        d = parent.create('textDAT', 'ae_tox_noembed_dat')
+        self.assertIsNone(self._decide(d))
 
     def test_skips_op_inside_tox_ancestor(self):
         self.embody.par.Autoexternalize = 'both'

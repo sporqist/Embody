@@ -58,6 +58,14 @@ class TestMCPTDNTools(EmbodyTestCase):
     # ------------------------------------------------------------------
 
     def test_read_tdn_include_dat_content_toggle(self):
+        """The toggle suppresses content only for a file-BACKED DAT.
+
+        Contract: include_dat_content=False means "skip content already
+        saved elsewhere", not "throw code away". An unbacked DAT is always
+        embedded because nothing else holds its code, so this test backs the
+        fixture DAT with a real file to exercise the toggle's actual job.
+        """
+        import os
         dat = self.fixture.op('notes')
         dat.text = 'MARKER_CONTENT_42'
         with_content = self.envoy._read_tdn(
@@ -66,11 +74,22 @@ class TestMCPTDNTools(EmbodyTestCase):
         self.assertIn('MARKER_CONTENT_42', serialized,
             'DAT content missing when include_dat_content=True')
 
-        without = self.envoy._read_tdn(
-            comp_path=self.fixture.path, include_dat_content=False)
-        serialized = json.dumps(without['tdn'])
-        self.assertNotIn('MARKER_CONTENT_42', serialized,
-            'DAT content leaked when include_dat_content=False')
+        path = os.path.join(project.folder, 'embody', 'unit_tests',
+                            '_test_temp', 'mcp_tdn_notes_probe.txt')
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8', newline='') as f:
+            f.write(dat.text)
+        dat.par.file = path
+        try:
+            without = self.envoy._read_tdn(
+                comp_path=self.fixture.path, include_dat_content=False)
+            serialized = json.dumps(without['tdn'])
+            self.assertNotIn('MARKER_CONTENT_42', serialized,
+                'backed DAT content leaked when include_dat_content=False')
+        finally:
+            dat.par.file = ''
+            if os.path.exists(path):
+                os.remove(path)
 
     # ------------------------------------------------------------------
     # C. Mode-agnostic read

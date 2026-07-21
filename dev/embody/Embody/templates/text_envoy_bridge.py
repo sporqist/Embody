@@ -2264,7 +2264,41 @@ def _install_signal_diagnostics():
     signal.signal(signal.SIGINT, _handle_sigint)
 
 
+def pin_stdio_utf8():
+    """Pin the STDIO transport to UTF-8 in BOTH directions.
+
+    MCP clients speak UTF-8 JSON-RPC over STDIO, but Python binds
+    sys.stdin/stdout to the LOCALE codepage -- CP1252 on a Western Windows
+    install -- not UTF-8. Decoding UTF-8 bytes as CP1252 silently mojibakes
+    every non-ASCII character on the way IN: an em dash (U+2014, bytes
+    E2 80 94) arrives as the three characters E2/20AC/201D. Nothing raises,
+    the value looks fine in the JSON response, and it only reads wrong once a
+    human sees a parameter label. Because it corrupts on WRITE, the damage is
+    then saved permanently into .toe / .tdn files.
+
+    (The outbound half was already safe by accident -- json.dumps defaults to
+    ensure_ascii=True -- and the HTTP hop to Envoy always encoded/decoded
+    UTF-8 explicitly. Only STDIO was unguarded.)
+
+    Called from main() rather than at import time so that importing this
+    module (the unit tests exec it inside TouchDesigner) never mutates the
+    host interpreter's streams.
+
+    errors='replace' rather than the default 'strict': a malformed byte from
+    a client must not kill a long-running bridge. Malformed JSON is already
+    tolerated by the read loop's JSONDecodeError handler.
+    """
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass  # Not a TextIOWrapper (redirected/wrapped) -- nothing to pin.
+
+
 def main():
+    # MUST run before any stdin read or stdout write.
+    pin_stdio_utf8()
+
     cli_port, config_path = parse_args()
     _init_file_logging(config_path)
 

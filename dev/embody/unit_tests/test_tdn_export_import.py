@@ -84,19 +84,40 @@ class TestTDNExportImport(EmbodyTestCase):
         self.assertDictHasKey(dat_entry, 'dat_content')
 
     def test_export_dat_content_excluded(self):
+        """include_dat_content=False suppresses embedding for a BACKED DAT.
+
+        Contract note: the toggle means "skip content that is ALREADY saved
+        elsewhere", not "throw code away". It therefore suppresses embedding
+        only for a DAT with its own externalized file -- an unbacked DAT is
+        always embedded because nothing else holds its code. That safety rule
+        is covered by TestTDNDroppedDATWarning; this test pins the toggle's
+        remaining, legitimate job: not duplicating what is already on disk.
+        """
+        import os
         dat = self.sandbox.create(textDAT, 'nocontent_dat')
         dat.text = 'secret'
-        result = self.tdn.ExportNetwork(
-            root_path=self.sandbox.path, include_dat_content=False)
-        tdn = result['tdn']
-        dat_entry = None
-        for o in tdn['operators']:
-            if o['name'] == 'nocontent_dat':
-                dat_entry = o
-                break
-        self.assertIsNotNone(dat_entry)
-        # Should not have dat_content key
-        self.assertNotIn('dat_content', dat_entry)
+        path = os.path.join(project.folder, 'embody', 'unit_tests',
+                            '_test_temp', 'nocontent_dat_probe.txt')
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8', newline='') as f:
+            f.write(dat.text)
+        dat.par.file = path
+        try:
+            result = self.tdn.ExportNetwork(
+                root_path=self.sandbox.path, include_dat_content=False)
+            tdn = result['tdn']
+            dat_entry = None
+            for o in tdn['operators']:
+                if o['name'] == 'nocontent_dat':
+                    dat_entry = o
+                    break
+            self.assertIsNotNone(dat_entry)
+            # No dat_content: the file on disk is the source of truth, so
+            # embedding here would only duplicate it.
+            self.assertNotIn('dat_content', dat_entry)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
 
     # --- v2.0: multi-line text dat_content stored as a plain string ---
 
@@ -658,3 +679,166 @@ class TestTDNExportImport(EmbodyTestCase):
             'XY group must not grow z/w components')
         self.assertAlmostEqual(
             float(rebuilt.par.Anchorx.eval()), 0.25, places=4)
+
+
+class TestTDNDroppedDATWarning(EmbodyTestCase):
+    """Guard against silent code loss when include_dat_content=False.
+
+    A DAT that carries its own externalized file is safe -- the .py on disk
+    is the source of truth and embedding would only duplicate it. A DAT with
+    NO file link exists only inside the .tdn, so dropping its content
+    discards that code permanently while the UI still reports a green
+    "Saved". Field report 2026-07-21, section 2.2: this cost a project every
+    shader and callback when TouchDesigner crashed.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tdn = self.embody.ext.TDN
+
+    def _drop_options(self):
+        return {'include_dat_content': False, 'max_depth': -1,
+                'embed_all': False}
+
+    def test_unbacked_dat_is_embedded_despite_toggle_off(self):
+        """The core data-safety guarantee: unbacked code is NEVER dropped.
+
+        include_dat_content=False means "skip content already saved
+        elsewhere", not "throw code away". A DAT with no externalized file
+        has no other persistence path, so its content must survive even
+        with embedding switched off.
+        """
+        dat = self.sandbox.create(textDAT, 'unbacked_code')
+        dat.text = 'def callback():\n    return 42\n'
+        options = self._drop_options()
+        data = self.tdn._exportSingleOp(dat, options, depth=0)
+        self.assertIn('dat_content', data,
+                      'an unbacked DAT must be embedded even when '
+                      'include_dat_content is False -- otherwise its code is '
+                      'lost with no other copy anywhere')
+        self.assertIn('return 42', str(data.get('dat_content')))
+        # ...and it must NOT be reported as dropped, because it was not.
+        dropped = options.get('_dropped_dats') or {}
+        self.assertNotIn(dat.path, dropped.get('unbacked', []))
+        self.assertNotIn(dat.path, dropped.get('backed', []))
+
+    def test_runtime_generated_dat_is_not_embedded(self):
+        """A fifoDAT log must NOT be dragged into a version-controlled .tdn.
+
+        The safety net is for authored content. A fifoDAT is a rolling
+        runtime buffer: embedding it serialized 117 lines of timestamped log
+        spam into Embody's own Embody.tdn and would churn the file on every
+        single save, while losing nothing if omitted.
+        """
+        fifo = self.sandbox.create(fifoDAT, 'log_buffer')
+        options = self._drop_options()
+        data = self.tdn._exportSingleOp(fifo, options, depth=0)
+        self.assertFalse(self.tdn._isUnbackedDAT(fifo),
+                         'a runtime-generated DAT is not "unbacked" content')
+        self.assertNotIn('dat_content', data,
+                         'fifoDAT runtime buffer must not be embedded')
+
+    def test_derived_dat_with_input_is_not_embedded(self):
+        """Content computed from an input reappears on cook -- do not embed."""
+        src = self.sandbox.create(textDAT, 'derive_src')
+        src.text = 'upstream\n'
+        derived = self.sandbox.create(nullDAT, 'derive_dst')
+        src.outputConnectors[0].connect(derived.inputConnectors[0])
+        options = self._drop_options()
+        data = self.tdn._exportSingleOp(derived, options, depth=0)
+        self.assertFalse(self.tdn._isUnbackedDAT(derived))
+        self.assertNotIn('dat_content', data)
+
+    def test_generated_exclusion_uses_the_canonical_set_and_short_form(self):
+        """Guard the exclusion against the short-vs-long form footgun.
+
+        The TDN safety net reuses EmbodyExt._TD_MANAGED_DAT_TYPES rather than
+        keeping a parallel list, so the two features can never disagree about
+        what counts as authored. That set is compared against `dat.type`
+        (SHORT form: 'fifo', not 'fifoDAT'); matching the long OPType instead
+        would silently never fire and quietly restore the log-spam bug.
+        """
+        managed = self.embody.ext.Embody._TD_MANAGED_DAT_TYPES
+        self.assertIn('fifo', managed,
+                      'rolling runtime buffers must be excluded')
+        # A real operator's .type must be in the same form the set uses.
+        fifo = self.sandbox.create(fifoDAT, 'formcheck_fifo')
+        self.assertEqual(fifo.type, 'fifo')
+        self.assertIn(fifo.type, managed,
+                      'set is in the wrong form -- exclusion would never match')
+
+    def test_unbacked_bucket_stays_empty_invariant(self):
+        """'unbacked' is now an invariant guard -- it must never fill."""
+        self.sandbox.create(textDAT, 'inv_a').text = 'a = 1\n'
+        self.sandbox.create(textDAT, 'inv_b').text = 'b = 2\n'
+        result = self.tdn.ExportNetwork(root_path=self.sandbox.path,
+                                        include_dat_content=False)
+        self.assertTrue(result.get('success'))
+
+    def test_backed_dat_recorded_as_safe(self):
+        import os
+        dat = self.sandbox.create(textDAT, 'backed_code')
+        dat.text = 'print("safe on disk")\n'
+        path = os.path.join(project.folder, 'embody', 'unit_tests',
+                            '_test_temp', 'backed_code_probe.txt')
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(dat.text)
+        dat.par.file = path
+        try:
+            options = self._drop_options()
+            self.tdn._exportSingleOp(dat, options, depth=0)
+            dropped = options.get('_dropped_dats') or {}
+            self.assertIn(dat.path, dropped.get('backed', []),
+                          'an externalized DAT is safe on disk, not lost')
+            self.assertNotIn(dat.path, dropped.get('unbacked', []))
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_empty_dat_not_recorded(self):
+        dat = self.sandbox.create(textDAT, 'empty_code')
+        dat.text = ''
+        options = self._drop_options()
+        self.tdn._exportSingleOp(dat, options, depth=0)
+        dropped = options.get('_dropped_dats') or {}
+        self.assertNotIn(dat.path, dropped.get('unbacked', []),
+                         'an empty DAT has no content to lose')
+        self.assertNotIn(dat.path, dropped.get('backed', []))
+
+    def test_embedding_records_nothing(self):
+        dat = self.sandbox.create(textDAT, 'embedded_code')
+        dat.text = 'x = 1\n'
+        options = {'include_dat_content': True, 'max_depth': -1,
+                   'embed_all': False}
+        self.tdn._exportSingleOp(dat, options, depth=0)
+        self.assertIsNone(options.get('_dropped_dats'),
+                          'nothing is dropped when content is embedded')
+
+    def test_full_export_preserves_unbacked_code(self):
+        """End-to-end: toggle off, yet unbacked code survives the export."""
+        dat = self.sandbox.create(textDAT, 'warned_code')
+        dat.text = 'still exports fine\n'
+        result = self.tdn.ExportNetwork(root_path=self.sandbox.path,
+                                        include_dat_content=False)
+        self.assertTrue(result.get('success'))
+        # Assert on THIS DAT's entry specifically -- the sandbox is shared
+        # with sibling tests, so scanning the whole document would be
+        # testing their operators, not ours.
+        entry = next((o for o in result['tdn']['operators']
+                      if o.get('name') == 'warned_code'), None)
+        self.assertIsNotNone(entry, 'warned_code missing from the export')
+        self.assertIn('dat_content', entry,
+                      'unbacked code must survive an embedding-off export')
+
+    def test_warn_helper_tolerates_every_shape(self):
+        """All branches: nothing collected, only-backed, and unbacked."""
+        self.tdn._warnDroppedDATs('/nowhere', {})
+        self.tdn._warnDroppedDATs(
+            '/nowhere', {'_dropped_dats': {'backed': ['/a'], 'unbacked': []}})
+        self.tdn._warnDroppedDATs(
+            '/nowhere', {'_dropped_dats': {'backed': [], 'unbacked': ['/b']}})
+        # Many unbacked -> message truncates rather than dumping everything
+        many = ['/p%d' % i for i in range(12)]
+        self.tdn._warnDroppedDATs(
+            '/nowhere', {'_dropped_dats': {'backed': [], 'unbacked': many}})

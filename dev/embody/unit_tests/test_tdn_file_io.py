@@ -879,9 +879,18 @@ class TestTDNFileIO(EmbodyTestCase):
 		self.assertGreater(len(lines), 1)
 
 	def test_export_dat_content_excluded_when_disabled(self):
-		"""DAT content should be absent when include_dat_content=False."""
+		"""A file-BACKED DAT's content is absent when the flag is False.
+
+		Contract: the flag means "skip content already saved elsewhere", not
+		"throw code away". An unbacked DAT is always embedded (nothing else
+		holds its code), so this fixture is backed by a real file to exercise
+		the flag's actual job: not duplicating what is on disk.
+		"""
 		dat = self.sandbox.create(textDAT, 'no_content')
 		dat.text = 'should not appear'
+		backing = Path(self._temp_dir) / 'no_content_backing.txt'
+		backing.write_text(dat.text, encoding='utf-8')
+		dat.par.file = str(backing)
 		fp = str(Path(self._temp_dir) / 'no_dc.tdn')
 		self.embody.ext.TDN.ExportNetwork(
 			root_path=self.sandbox.path, output_file=fp,

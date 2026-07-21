@@ -391,18 +391,34 @@ class TestTDNPaletteCatalog(EmbodyTestCase):
 			'include_dat_content=False')
 
 	def test_E02_standalone_dat_respects_content_flag(self):
-		"""Regular DAT (not inside animationCOMP) still respects the flag."""
+		"""Regular BACKED DAT (not inside animationCOMP) respects the flag.
+
+		Contract: the flag means "skip content already saved elsewhere". An
+		unbacked DAT is always embedded because nothing else holds its data,
+		so this table is backed by a real file to exercise the flag itself.
+		"""
+		import os
 		tbl = self.sandbox.create(tableDAT, 'standalone_tbl')
 		tbl.clear()
 		tbl.appendRow(['a', 'b'])
-		result = self.tdn.ExportNetwork(
-			root_path=self.sandbox.path, include_dat_content=False)
-		self.assertTrue(result.get('success'))
+		path = os.path.join(project.folder, 'embody', 'unit_tests',
+							'_test_temp', 'standalone_tbl_probe.txt')
+		os.makedirs(os.path.dirname(path), exist_ok=True)
+		with open(path, 'w', encoding='utf-8', newline='') as f:
+			f.write('a\tb\n')
+		tbl.par.file = path
+		try:
+			result = self.tdn.ExportNetwork(
+				root_path=self.sandbox.path, include_dat_content=False)
+			self.assertTrue(result.get('success'))
 
-		tbl_export = self._findOpInExport(result['tdn'], 'standalone_tbl')
-		self.assertIsNotNone(tbl_export)
-		self.assertNotIn('dat_content', tbl_export,
-			'Standalone DAT must NOT carry content when flag is False')
+			tbl_export = self._findOpInExport(result['tdn'], 'standalone_tbl')
+			self.assertIsNotNone(tbl_export)
+			self.assertNotIn('dat_content', tbl_export,
+				'Backed standalone DAT must NOT carry content when flag is False')
+		finally:
+			if os.path.exists(path):
+				os.remove(path)
 
 	def test_E03_animationcomp_dats_roundtrip(self):
 		"""animationCOMP internal data survives export -> destroy -> import."""

@@ -2567,3 +2567,104 @@ class TestBridgeStdoutSerialization(EmbodyTestCase):
             f'{bad_lines[:5]}')
 
 
+
+# =====================================================================
+# STDIO encoding (UTF-8 pinning)
+# =====================================================================
+
+class TestBridgeStdioEncoding(EmbodyTestCase):
+    """Regression: the STDIO transport must be pinned to UTF-8.
+
+    MCP clients send UTF-8 JSON-RPC, but Python binds sys.stdin/stdout to
+    the LOCALE codepage on Windows (CP1252). Without pinning, an em dash
+    (U+2014 -> bytes E2 80 94) is decoded as the three CP1252 characters
+    E2/20AC/201D. It never raises, so it corrupted parameter labels and
+    annotation titles silently -- and permanently, since it corrupts on
+    write into .toe / .tdn files. Field report 2026-07-21, section 2.1.
+    """
+
+    def test_pin_stdio_utf8_exists(self):
+        """The pinning helper must exist and be callable."""
+        self.assertTrue(
+            hasattr(bridge, 'pin_stdio_utf8'),
+            'bridge.pin_stdio_utf8() is missing -- STDIO would fall back to '
+            'the locale codepage and silently mojibake non-ASCII input')
+        self.assertTrue(callable(bridge.pin_stdio_utf8))
+
+    def test_pins_all_three_streams_to_utf8(self):
+        """stdin, stdout and stderr are all reconfigured to UTF-8."""
+        fake_in, fake_out, fake_err = MagicMock(), MagicMock(), MagicMock()
+        with patch.object(sys, 'stdin', fake_in), \
+             patch.object(sys, 'stdout', fake_out), \
+             patch.object(sys, 'stderr', fake_err):
+            bridge.pin_stdio_utf8()
+
+        for name, stream in (('stdin', fake_in), ('stdout', fake_out),
+                             ('stderr', fake_err)):
+            stream.reconfigure.assert_called_once()
+            kwargs = stream.reconfigure.call_args.kwargs
+            self.assertEqual(
+                kwargs.get('encoding'), 'utf-8',
+                f'{name} was not pinned to utf-8')
+            # 'replace' so one malformed byte cannot kill a long-running bridge
+            self.assertEqual(kwargs.get('errors'), 'replace',
+                             f'{name} should decode with errors=replace')
+
+    def test_survives_streams_without_reconfigure(self):
+        """A wrapped/redirected stream (no .reconfigure) must not raise."""
+        class _NoReconfigure:
+            pass
+
+        with patch.object(sys, 'stdin', _NoReconfigure()), \
+             patch.object(sys, 'stdout', _NoReconfigure()), \
+             patch.object(sys, 'stderr', _NoReconfigure()):
+            bridge.pin_stdio_utf8()  # must not raise
+
+    def test_import_does_not_mutate_host_streams(self):
+        """Importing the bridge must NOT reconfigure the host interpreter.
+
+        The pinning belongs in main(), not at module scope: these tests
+        exec the bridge inside TouchDesigner, and an import-time pin would
+        mutate TD's own stdout.
+        """
+        source = open(_bridge_path, 'r', encoding='utf-8').read()
+        # Find module-level (column-0) reconfigure calls -- indented ones
+        # live inside pin_stdio_utf8() and are correct.
+        offenders = [ln for ln in source.splitlines()
+                     if ln.startswith('sys.stdin.reconfigure')
+                     or ln.startswith('sys.stdout.reconfigure')
+                     or ln.startswith('sys.stderr.reconfigure')
+                     or ln.startswith('for _stream in')]
+        self.assertEqual(
+            offenders, [],
+            'STDIO pinning must not run at import time (module scope); '
+            f'found: {offenders}')
+
+    def test_round_trip_utf8_payload(self):
+        """A UTF-8 JSON-RPC line survives a UTF-8-pinned stdin byte stream."""
+        # Built with chr(), never as literal non-ASCII source: this file must
+        # stay pure ASCII (ascii-punctuation rule), and a test that asserts on
+        # literal non-ASCII silently stops testing anything the moment its own
+        # source gets mangled -- the exact trap the field report hit.
+        sample = chr(0x2014) + 'R' + chr(0x2091)  # em dash + R + subscript e
+        payload = {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                   'params': {'text': sample}}
+        raw = (json.dumps(payload, ensure_ascii=False) + '\n').encode('utf-8')
+
+        # Mimic the pinned stdin: UTF-8 TextIOWrapper over the raw bytes.
+        stream = io.TextIOWrapper(io.BytesIO(raw), encoding='utf-8',
+                                  errors='replace')
+        decoded = json.loads(stream.readline())
+        self.assertEqual(decoded['params']['text'], sample)
+        self.assertEqual([hex(ord(c)) for c in decoded['params']['text']],
+                         ['0x2014', '0x52', '0x2091'])
+
+    def test_cp1252_decoding_reproduces_the_bug(self):
+        """Guard the diagnosis: CP1252-decoding UTF-8 yields the mojibake."""
+        em_dash = chr(0x2014)
+        raw = em_dash.encode('utf-8')          # E2 80 94
+        mangled = raw.decode('cp1252')
+        self.assertEqual([hex(ord(c)) for c in mangled],
+                         ['0xe2', '0x20ac', '0x201d'])
+        # And the documented repair is lossless.
+        self.assertEqual(mangled.encode('cp1252').decode('utf-8'), em_dash)

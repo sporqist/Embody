@@ -96,7 +96,7 @@ externalised — `applyTagToOperator` refuses them ("DAT tags can only be applie
 to supported DAT types"). So the TDN embed is the *only* persistence path for
 that project's code, and it was off by default.
 
-> **Correction (verified 2026-07-21, Embody 6.0.144).** This last paragraph is
+> **Correction (verified 2026-07-21, Embody 6.0.141+cm.4).** This last paragraph is
 > mistaken, and the mistake matters because it points at the wrong remedy.
 > DATs inside a TDN-strategy COMP **can** be externalised: tagging one live
 > inside a `tdn`-tagged COMP succeeds ("Tag 'py' applied"). The refusal quoted
@@ -111,7 +111,7 @@ that project's code, and it was off by default.
 > disk is the *better* one (diffable, editable, greppable). Fixed in two
 > layers: newly-created DATs under a non-embedding `.tdn` are now
 > auto-externalised to their own file, and any authored DAT content that still
-> has no file is embedded rather than dropped. See changelog v6.0.145.
+> has no file is embedded rather than dropped. See changelog 6.0.141+cm.4.
 
 **Ask:** default this to true, or refuse to report a TDN externalisation as
 "saved" when it contains DATs whose content was dropped. A one-line warning
@@ -356,6 +356,90 @@ documented it.
 | 11 | Filter stock-component errors | Medium | Protects the error gate from noise blindness |
 | 12 | `create_op` honour or drop `node_x/y` | Low | Silent ignore is the worst option |
 | 13 | Region capture on `capture_top` | Low | Inspect textures without moving the scene |
+
+---
+
+## 6b. Addendum — further findings, same session
+
+Added after the original write-up, while building OVATION integration, a change
+tracker, and the terrain/bathymetry work. Noting the correction above on 2.2:
+useful to know the embed toggle was never the only path, and that DAT tagging
+does work inside a TDN COMP — the refusal I hit was an Info DAT type check.
+
+### 6b.1 Sequence pages are 0-indexed, and nothing says so
+
+`glslPOP`'s **Vectors** and **Samplers** pages start at index **0**:
+`vec0name`, `sampler0name`. I had been writing to `vec1name` upward on every
+shader I authored this session — which *works* (they are just later slots), but
+meant that when I later introspected an operator authored earlier, slot 0 held
+`uAlt` while my probe loop started at 1 and reported **"no uniforms bound"** for
+a shader that plainly used one. I briefly believed the shader was compiling
+against undefined uniforms.
+
+Compare with the attribute sequence, where the length is set through
+`op.seq.attr.numBlocks` rather than a parameter. Three related sequence
+concepts, three different access idioms, no discoverable pattern.
+
+**Ask:** document the indexing base per sequence page, or expose sequences
+uniformly (`op.seq.vec`, `op.seq.sampler`, `op.seq.attr`) so an agent can
+enumerate rather than guess an origin.
+
+### 6b.2 A Parameter Execute DAT watching its own parent COMP never fires
+
+I built an event-based change log: a `parameterexecuteDAT` inside
+`/project1/control`, with `op` set to `/project1/control`, `pars='*'`,
+`valuechange=True`, `modechange=True`, `custom=True`, `builtin=False`,
+`active=True`.
+
+It **never fired**. No error, no log entry, nothing in the Embody ring buffer,
+`.errors()` empty. Changing a watched custom parameter produced no callback.
+Configuration verified by reading every parameter back.
+
+The likely cause is that a Parameter Execute DAT is suppressed when watching the
+COMP it lives inside (presumably recursion protection, since the callback often
+writes into that same COMP). If that is deliberate it needs to *say so* — a
+warning on the DAT would have saved the investigation. If it is not deliberate,
+it is a bug.
+
+I fell back to a poll-and-diff design, which turned out better suited to the
+actual need ("what changed since I last looked" rather than "what changed
+ever") — but I could not have known that up front.
+
+**Ask:** warn when an execute DAT's watch target makes it inert, or support the
+self-watching case.
+
+### 6b.3 Read-after-write bit me a third time, in a new disguise
+
+Item 3.1 again, worth reinforcing because the failure mode keeps changing shape.
+Testing the change-log callback, I set a parameter and read the log table **in
+the same `code_mode` call**. Empty. I concluded the callback was broken and
+started debugging it — when at that point the only thing proven was that the
+callback had not run *yet*.
+
+The pattern is insidious because the stale read is always *plausible*: a
+previous texture, an unchanged table, a parameter that "didn't take". Each time
+it costs a debugging detour down the wrong path. This remains my single highest
+-value request.
+
+### 6b.4 Things that worked notably well since the original write-up
+
+- **`mod('name').Function()` for shared logic** is excellent. Putting camera
+  aiming maths in a module DAT and calling it from three parameter expressions
+  is clean, testable, and survived a save/reload intact.
+- **Parameter binding (`ParMode.BIND` + `bindExpr`)** scaled to 40+ parameters
+  across three COMPs without a single surprise. The control-surface pattern in
+  section 5 rests entirely on it.
+- **`numpyArray()` on TOPs** made data verification possible — probing an
+  elevation dataset by latitude/longitude to confirm its encoding, then checking
+  hillshade output ratios against the source. Without it I would have been
+  reduced to looking at pictures and guessing.
+
+### 6b.5 Updated asks
+
+| # | Ask | Severity | Why |
+|---|-----|----------|-----|
+| 14 | Document/normalise sequence indexing | Medium | Silent misread of an operator's own configuration |
+| 15 | Warn when an execute DAT is inert | Medium | Cost a full build-and-abandon cycle, no diagnostic available |
 
 ---
 

@@ -17,13 +17,51 @@ root = Path(project.folder).parents[0]
 BUILD_RE = re.compile(r'\b\d{4}\.\d{3,6}\b')
 
 
+# This fork's version is a FROZEN upstream anchor plus our own build counter:
+#
+#     6.0.141+cm.4
+#     ^^^^^^^ ^^^^
+#     |       |
+#     |       our build counter -- the ONLY part that ever moves
+#     upstream Embody (dylanroscover/Embody) this fork diverged from
+#
+# 6.0.141 is the last version upstream actually published before the fork
+# (commit 2c980a8, dev/Embody-6.141.toe); it states which upstream
+# Embody/Envoy a build is compatible with and must never be incremented here.
+#
+# Why parsed strictly instead of "bump the last dotted segment": the previous
+# implementation did exactly that, so every save walked the UPSTREAM triple
+# forward. Builds 6.0.142-6.0.144 silently claimed upstream numbers this fork
+# does not own, and a release was published advertising compatibility with an
+# upstream 6.0.144 that does not exist. Matching the shape explicitly makes
+# that class of mistake structurally impossible rather than merely unlikely.
+VERSION_RE = re.compile(r'^(?P<base>\d+\.\d+\.\d+)\+cm\.(?P<build>\d+)$')
+
+
+def bump_version(version):
+    """Pure: next version string, or None if the shape is unrecognized.
+
+    Kept side-effect free (like _rewriteText) so the whole increment rule is
+    unit-testable without writing to par.Version.
+    """
+    match = VERSION_RE.match(str(version).strip())
+    if not match:
+        return None
+    return f"{match.group('base')}+cm.{int(match.group('build')) + 1}"
+
+
 def version(version):
-    # get current versions
-    increment = int(version.rsplit('.', 1)[1])
-    major_minor = version.rsplit('.', 1)[0]
-    # update version
-    increment += 1
-    new_version = f"{major_minor}.{increment}"
+    """Bump ONLY the fork build counter; never the upstream anchor.
+
+    On an unrecognized shape the version is left untouched and the problem is
+    reported, rather than guessed at -- a wrong version number is worse than a
+    stale one, and this must never abort the user's save.
+    """
+    new_version = bump_version(version)
+    if new_version is None:
+        debug(f'par.Version {version!r} is not <upstream>+cm.<n> -- leaving it '
+              f'unchanged. Set it to e.g. 6.0.141+cm.1 to restore versioning.')
+        return version
     comp.par.Version.val = new_version
     return new_version
 
@@ -67,8 +105,12 @@ def updateVersionDocs(build, new_version):
     year = str(build).split('.')[0]
     targets = [
         (root / 'README.md', [
+            # The value may carry our +cm.N build suffix -- match it, or the
+            # rewrite silently stops working after the first transition
+            # (`[0-9.]*` halts at the '+', so the trailing '-' never matches).
             ('[![Version](https://img.shields.io/badge/version-',
-             lambda l: re.sub(r'version-[0-9][0-9.]*-', f'version-{new_version}-', l, count=1)),
+             lambda l: re.sub(r'version-[0-9][0-9.]*(?:\+cm\.[0-9]+)?-',
+                              f'version-{new_version}-', l, count=1)),
             ('[![TouchDesigner](https://img.shields.io/badge/TouchDesigner-',
              lambda l: re.sub(r'TouchDesigner-\d{4}-', f'TouchDesigner-{year}-', l, count=1)),
             ('**Requirements:** TouchDesigner',

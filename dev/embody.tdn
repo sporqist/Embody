@@ -1,10 +1,10 @@
 format: tdn
 version: '2.0'
-build: 771
-generator: Embody/6.0.144
+build: 806
+generator: Embody/6.0.141+cm.4
 td_build: 099.2025.33070
-source_file: Embody-6.144.toe
-exported_at: '2026-07-20T21:50:36Z'
+source_file: Embody-6.145.toe
+exported_at: '2026-07-21T13:11:23Z'
 network_path: /embody
 options:
   include_dat_content: false
@@ -296,7 +296,7 @@ operators:
       style: Toggle
       label: Embed DATs (default)
       startSection: true
-      help: When enabled, DAT content (text and table data) is included in TDN exports by default. Can be overridden per-export. Disabling reduces file size but loses DAT content.
+      help: Include DAT content (text and table data) in TDN exports by default. Can be overridden per-export or per-COMP. Disabling reduces file size by skipping DATs that are ALREADY externalized to their own files; DATs with no file of their own are always embedded regardless, so code is never silently lost.
     - name: Embedstorageintdns
       style: Toggle
       label: Embed Storage (default)
@@ -319,7 +319,7 @@ operators:
       label: Auto-Save Status
       readOnly: true
       help: 'Read-only auto-save state: Idle / Saving / Bypassed (Perform Mode) / Disabled.'
-      value: Saved 21:49:58 UTC
+      value: Saved 13:10:31 UTC
     - name: Tdnstriponsave
       style: Toggle
       label: Strip on Save
@@ -744,7 +744,7 @@ operators:
       startSection: true
       readOnly: true
       help: Embody version string (read-only).
-      value: 6.0.144
+      value: 6.0.141+cm.4
     - name: Touchbuild
       style: Str
       label: Touch Build
@@ -761,7 +761,7 @@ operators:
       label: Build Number
       readOnly: true
       help: Embody build number (read-only). Incremented with each release.
-      value: 890
+      value: 910
     - name: Github
       style: Pulse
       label: GitHub
@@ -772,7 +772,7 @@ operators:
       label: Build Date
       readOnly: true
       help: Date of this Embody build (read-only).
-      value: 2026-07-20 21:50:35 UTC
+      value: 2026-07-21 13:11:22 UTC
     - name: Help
       style: Pulse
       help: Opens the Embody help documentation.
@@ -788,7 +788,7 @@ operators:
     _tdn_restore_failures:
     - /embody/base1
     _start_in_progress: true
-    _watchdog_gen: 975
+    _watchdog_gen: 995
     _suite_proof_progress:
       todo:
       - test_ancestor_rename
@@ -930,8 +930,8 @@ operators:
           tot: 33
           fail: 1
       pending_after: absent
-    _clip_watch_gen: 740
-    _shortcut_rec_gen: 377
+    _clip_watch_gen: 760
+    _shortcut_rec_gen: 419
   tdn_ref: embody/Embody.tdn
 - name: base_tdn
   type: baseCOMP

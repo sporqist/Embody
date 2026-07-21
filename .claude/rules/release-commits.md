@@ -6,6 +6,30 @@ description: "Procedure for preparing version release commits -- changelog, READ
 
 When the user asks to prepare a release commit (e.g., "prep a commit for v217"), follow these steps in order.
 
+## Versioning (read first)
+
+This is a FORK. Its version is a **frozen upstream anchor plus our own build
+counter**: `6.0.141+cm.N`.
+
+- `6.0.141` is the last version upstream (dylanroscover/Embody) actually
+  published before the fork diverged (commit `2c980a8`). It states which
+  upstream Embody/Envoy a build is compatible with. **It never moves.**
+- `cm.N` is our build counter and is the ONLY part a save increments.
+
+`onProjectPreSave` used to bump the last dotted segment, which walked the
+UPSTREAM triple forward on every save -- builds `6.0.142`-`6.0.144` claimed
+upstream numbers this fork does not own, and a release shipped advertising an
+upstream `6.0.144` that does not exist. `execute_src_ctrl.bump_version()` now
+parses the `+cm.N` shape explicitly and refuses anything else; never "fix" a
+version by hand-incrementing the triple.
+
+Releases are tagged `v<version>` (e.g. `v6.0.141+cm.4`) and the artifact is
+`Embody-codemode-v<version>.tox`. `test_version_sync` fails on any drift.
+
+**The `.toe` filename is NOT the version.** TouchDesigner increments the
+`.toe`'s own trailing number on each save; it is just a save counter and has
+no relationship to `par.Version`. Do not read a version out of it.
+
 ## 0. Save the Project
 
 The entire save call is `project.save()` -- no arguments. TD increments the `.toe` filename's trailing build, the `onProjectPreSave` hook in `dev/embody/execute_src_ctrl.py` bumps `par.Version`, deletes the prior release `.tox`, and exports the new one. Filename and `par.Version` stay in lock-step.

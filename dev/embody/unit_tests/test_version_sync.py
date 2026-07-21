@@ -22,6 +22,12 @@ EmbodyTestCase = runner_mod.EmbodyTestCase
 
 BUILD_RE = re.compile(r'\b\d{4}\.\d{3,6}\b')
 
+# The last version upstream (dylanroscover/Embody) actually published before
+# this fork diverged -- commit 2c980a8, dev/Embody-6.141.toe. Frozen: it says
+# which upstream Embody/Envoy a build is compatible with, and a save must
+# never advance it (see test_version_never_claims_an_upstream_number).
+UPSTREAM_ANCHOR = '6.0.141'
+
 README_ANCHOR = '**Requirements:** TouchDesigner'
 DOCS_ANCHOR = '- **TouchDesigner '
 CONTRIB_ANCHOR = '- **TouchDesigner '
@@ -59,12 +65,52 @@ class TestVersionSync(EmbodyTestCase):
 
     def test_readme_badge_matches_par_version(self):
         text = self._read('README.md')
-        match = re.search(r'badge/version-([0-9][0-9.]*)-', text)
+        # The value carries this fork's +cm.N build suffix (frozen upstream
+        # anchor + our counter) -- the suffix must be part of the capture or
+        # the comparison below trivially fails.
+        match = re.search(r'badge/version-([0-9][0-9.]*(?:\+cm\.[0-9]+)?)-', text)
         self.assertIsNotNone(match, 'version badge missing from README')
         self.assertEqual(
             match.group(1), op.Embody.par.Version.eval(),
             'README version badge out of sync with par.Version -- '
             'updateVersionDocs should rewrite it on every save')
+
+    def test_version_never_claims_an_upstream_number(self):
+        """par.Version must keep the frozen upstream anchor + our counter.
+
+        The regression this guards: the save hook used to bump the last dotted
+        segment, walking the UPSTREAM triple forward on every save. Builds
+        6.0.142-6.0.144 claimed upstream numbers this fork does not own, and a
+        release shipped advertising an upstream 6.0.144 that does not exist.
+        """
+        v = op.Embody.par.Version.eval()
+        m = re.match(r'^(\d+\.\d+\.\d+)\+cm\.(\d+)$', v)
+        self.assertIsNotNone(
+            m, f'par.Version {v!r} must be <upstream>+cm.<n>, e.g. 6.0.141+cm.4')
+        self.assertEqual(
+            m.group(1), UPSTREAM_ANCHOR,
+            f'upstream anchor moved to {m.group(1)} -- it is frozen at '
+            f'{UPSTREAM_ANCHOR} (the last release upstream actually published '
+            f'before this fork) and must never be incremented by a save')
+
+    def test_hook_bumps_only_the_build_counter(self):
+        """The generator itself must never advance the upstream triple.
+
+        Drives the PURE bump_version() -- version() writes par.Version, so
+        calling it here would mutate the real project version.
+        """
+        m = self._src_ctrl()
+        self.assertEqual(m.bump_version('6.0.141+cm.4'), '6.0.141+cm.5')
+        self.assertEqual(m.bump_version('6.0.141+cm.9'), '6.0.141+cm.10')
+        self.assertEqual(m.bump_version('6.0.141+cm.99'), '6.0.141+cm.100')
+        # The upstream triple is untouched no matter how far the counter runs.
+        for probe in ('6.0.141+cm.1', '6.0.141+cm.7'):
+            self.assertTrue(m.bump_version(probe).startswith(UPSTREAM_ANCHOR + '+cm.'))
+        # A bare upstream triple (the OLD scheme) is rejected, not bumped --
+        # this is exactly the input that used to produce 6.0.145.
+        self.assertIsNone(m.bump_version('6.0.144'))
+        self.assertIsNone(m.bump_version('6.0.141+cm'))
+        self.assertIsNone(m.bump_version(''))
 
     def test_min_build_consistent_across_docs(self):
         readme = self._min_build(self._read('README.md'), README_ANCHOR, 'README.md')

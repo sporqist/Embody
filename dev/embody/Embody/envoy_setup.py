@@ -731,6 +731,7 @@ def check_or_init_git_repo(ext):
                 }
                 git_kwargs = dict(
                     capture_output=True, text=True,
+                    encoding='utf-8', errors='replace',
                     cwd=str(project_dir), env=clean_env,
                 )
                 subprocess.run(['git', 'init'], check=True, **git_kwargs)
@@ -1335,8 +1336,8 @@ def configure_tdn_diff_driver(ext, target_dir, python_cmd):
         script_str = str(script_path).replace('\\', '/')
         driver = '"%s" "%s"' % (python_cmd, script_str)
         git_kwargs = dict(cwd=str(target_dir), capture_output=True,
-                          text=True, timeout=10,
-                          stdin=subprocess.DEVNULL)
+                          text=True, encoding='utf-8', errors='replace',
+                          timeout=10, stdin=subprocess.DEVNULL)
         current = subprocess.run(
             ['git', 'config', '--get', 'diff.tdn.textconv'], **git_kwargs)
         if (current.stdout or '').strip() != driver:

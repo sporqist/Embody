@@ -6541,7 +6541,7 @@ class TDNExt:
 					  % (len(comps), comps[0].name), 'INFO')
 		return self.CopyNetworkToClipboard(comps[0])
 
-	def _planPasteFromClipboard(self) -> dict:
+	def _planPasteFromClipboard(self, clipboard_str=None) -> dict:
 		"""Turn the clipboard into an import plan. Never executes anything.
 
 		Own envelope source -> direct import. Community envelope source -> hand
@@ -6550,8 +6550,13 @@ class TDNExt:
 		text copied from an editor -- carries NO provenance, so it is sandboxed
 		(inert) like community content; use ImportNetworkFromFile for a trusted
 		local file. Returns {'ok': False, ...} with no usable TDN.
+
+		clipboard_str, when provided, is used verbatim instead of reading the OS
+		clipboard -- so tests can exercise the paste logic deterministically
+		without ui.clipboard, which any other process can clobber mid-test.
 		"""
-		raw = ui.clipboard or ''
+		raw = (clipboard_str if clipboard_str is not None
+			   else (ui.clipboard or ''))
 		env = unwrap_clipboard(raw)
 		if env is None:
 			# No _embody_tdn envelope -- maybe a bare .tdn document (YAML or
@@ -6612,12 +6617,15 @@ class TDNExt:
 		finally:
 			target.allowCooking = prev
 
-	def PasteNetworkFromClipboard(self, target: 'OP') -> dict:
-		"""Import a clipboard _embody_tdn envelope INTO the target COMP."""
+	def PasteNetworkFromClipboard(self, target: 'OP', clipboard_str=None) -> dict:
+		"""Import a clipboard _embody_tdn envelope INTO the target COMP.
+
+		clipboard_str overrides the OS clipboard (see _planPasteFromClipboard);
+		production callers omit it and read ui.clipboard as before."""
 		target = op(target) if isinstance(target, str) else target
 		if target is None or not target.isCOMP:
 			return {'ok': False, 'reason': 'not_a_comp'}
-		plan = self._planPasteFromClipboard()
+		plan = self._planPasteFromClipboard(clipboard_str=clipboard_str)
 		if not plan.get('ok'):
 			return plan
 		res = self._importPlanned(target, plan)

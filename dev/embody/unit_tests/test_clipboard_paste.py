@@ -358,6 +358,7 @@ class TestClipboardPasteRouting(EmbodyTestCase):
         super().setUp()
         self.tdn_ext = self.embody.ext.TDN
         self.m = _tdn_module()
+        self._clip = ''
         try:
             self._saved_clip = ui.clipboard
         except Exception:
@@ -372,7 +373,10 @@ class TestClipboardPasteRouting(EmbodyTestCase):
         super().tearDown()
 
     def _set_clipboard(self, text):
-        ui.clipboard = text
+        # Store the envelope locally and drive the paste logic with it
+        # directly (clipboard_str=), never the OS clipboard -- another
+        # process can clobber ui.clipboard between write and read.
+        self._clip = text
 
     def _safe_import(self):
         coll = self.embody.op('Collection')
@@ -399,7 +403,7 @@ class TestClipboardPasteRouting(EmbodyTestCase):
     def test_own_envelope_routes_direct(self):
         env = self.m.wrap_tdn(_sample_tdn(), source='embody', slug='widget')
         self._set_clipboard(self.m.to_clipboard_str(env))
-        plan = self.tdn_ext._planPasteFromClipboard()
+        plan = self.tdn_ext._planPasteFromClipboard(clipboard_str=self._clip)
         self.assertTrue(plan.get('ok'), msg=repr(plan))
         self.assertEqual(plan['source'], 'embody')
         self.assertEqual(plan['mode'], 'direct')
@@ -418,7 +422,7 @@ class TestClipboardPasteRouting(EmbodyTestCase):
             'fixture must START armed (not inert) for the test to be meaningful')
         env = self.m.wrap_tdn(armed, source='embody.tools', slug='shared')
         self._set_clipboard(self.m.to_clipboard_str(env))
-        plan = self.tdn_ext._planPasteFromClipboard()
+        plan = self.tdn_ext._planPasteFromClipboard(clipboard_str=self._clip)
         self.assertTrue(plan.get('ok'), msg=repr(plan))
         self.assertEqual(plan['source'], 'embody.tools')
         # Community content is default-inerted by the Collection sandbox.
@@ -439,7 +443,7 @@ class TestClipboardPasteRouting(EmbodyTestCase):
         self.assertFalse(si.is_inert(armed),
             'fixture must START armed for the test to be meaningful')
         self._set_clipboard(json.dumps(armed))
-        plan = self.tdn_ext._planPasteFromClipboard()
+        plan = self.tdn_ext._planPasteFromClipboard(clipboard_str=self._clip)
         self.assertTrue(plan.get('ok'), msg=repr(plan))
         self.assertEqual(plan['source'], 'file')
         self.assertEqual(plan['mode'], 'inert')
@@ -449,18 +453,18 @@ class TestClipboardPasteRouting(EmbodyTestCase):
 
     def test_garbage_returns_not_ok(self):
         self._set_clipboard('this is not json and not a tdn at all')
-        plan = self.tdn_ext._planPasteFromClipboard()
+        plan = self.tdn_ext._planPasteFromClipboard(clipboard_str=self._clip)
         self.assertFalse(plan.get('ok'))
 
     def test_empty_clipboard_returns_not_ok(self):
         self._set_clipboard('')
-        plan = self.tdn_ext._planPasteFromClipboard()
+        plan = self.tdn_ext._planPasteFromClipboard(clipboard_str=self._clip)
         self.assertFalse(plan.get('ok'))
 
     def test_non_envelope_json_without_operators_returns_not_ok(self):
         # Valid JSON, but not an envelope and not a tdn doc (no 'operators').
         self._set_clipboard(json.dumps({'hello': 'world'}))
-        plan = self.tdn_ext._planPasteFromClipboard()
+        plan = self.tdn_ext._planPasteFromClipboard(clipboard_str=self._clip)
         self.assertFalse(plan.get('ok'))
 
 
@@ -549,8 +553,8 @@ class TestClipboardCopySelectedAndIntegrity(EmbodyTestCase):
         env['tdn']['operators'].append({'name': 'injected', 'type': 'nullTOP'})
         # sha256 no longer matches the (now-mutated) inner tdn.
         self.assertFalse(self.m.verify_envelope_integrity(env))
-        ui.clipboard = self.m.to_clipboard_str(env)
-        plan = self.tdn_ext._planPasteFromClipboard()
+        clip = self.m.to_clipboard_str(env)
+        plan = self.tdn_ext._planPasteFromClipboard(clipboard_str=clip)
         self.assertTrue(plan.get('ok'), msg=repr(plan))
         self.assertEqual(plan['mode'], 'direct')
         self.assertEqual(plan['source'], 'embody')
@@ -561,7 +565,7 @@ class TestClipboardCopySelectedAndIntegrity(EmbodyTestCase):
         # And a live paste of that plan succeeds and reconstructs the children,
         # confirming the integrity flag is advisory, not a gate.
         target = self.sandbox.create(baseCOMP, 'mut_target')
-        res = self.tdn_ext.PasteNetworkFromClipboard(target)
+        res = self.tdn_ext.PasteNetworkFromClipboard(target, clipboard_str=clip)
         self.assertTrue(res.get('ok'), msg=repr(res))
         child_names = sorted(c.name for c in target.children)
         self.assertIn('injected', child_names)

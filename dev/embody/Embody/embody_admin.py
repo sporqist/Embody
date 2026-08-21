@@ -198,7 +198,8 @@ def compute_uninstall_plan(ext, target_dir=None):
             try:
                 r = subprocess.run(['git', 'config', '--get', key],
                                    cwd=str(root), capture_output=True,
-                                   text=True, timeout=5,
+                                   text=True, encoding='utf-8',
+                                   errors='replace', timeout=5,
                                    stdin=subprocess.DEVNULL)
                 if r.returncode == 0 and (r.stdout or '').strip():
                     plan['unset'].append(key)
@@ -383,6 +384,7 @@ def execute_uninstall_plan(ext, plan, include_review=False):
         try:
             subprocess.run(['git', 'config', '--unset', key],
                            cwd=str(root), capture_output=True, text=True,
+                           encoding='utf-8', errors='replace',
                            timeout=5, stdin=subprocess.DEVNULL)
             summary['unset'] += 1
         except Exception as e:

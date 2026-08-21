@@ -531,6 +531,7 @@ class EmbodyExt:
                 subprocess.run(
                     [uv, 'venv', venv_dir, '--python', python_exe],
                     check=True, capture_output=True, text=True,
+                    encoding='utf-8', errors='replace',
                     stdin=subprocess.DEVNULL,
                 )
 
@@ -538,6 +539,7 @@ class EmbodyExt:
             subprocess.run(
                 [uv, 'pip', 'install'] + deps + ['--python', venv_python],
                 check=True, capture_output=True, text=True,
+                encoding='utf-8', errors='replace',
                 stdin=subprocess.DEVNULL,
             )
             log('Python environment ready', 'SUCCESS')
@@ -592,6 +594,7 @@ class EmbodyExt:
             subprocess.run(
                 [python_exe, '-m', 'pip', 'install', '--user', 'uv'],
                 check=True, capture_output=True, text=True,
+                encoding='utf-8', errors='replace',
                 stdin=subprocess.DEVNULL,
             )
         except subprocess.CalledProcessError as e:
@@ -3505,6 +3508,27 @@ class EmbodyExt:
                 self.Log(
                     f"Failed to strip tags from {op_ref.path}: {e}", "WARNING")
 
+        # Phase 2.5: Reset ship-at-default user-preference params. Their live
+        # value is a DEV-MACHINE preference; baking it into the release .tox
+        # ships that preference to every user -- e.g. Clipboardautopaste=False
+        # on this machine would silently disable auto-paste for everyone who
+        # installs the release. Reset each to its default for the exported
+        # artifact only; the live value is restored in Phase 4. (Ports the
+        # concept of upstream v6.0.252's Clipboardautopaste release-leak fix.)
+        SHIP_DEFAULT_PARS = ('Clipboardautopaste',)
+        saved_prefs = []
+        for par_name in SHIP_DEFAULT_PARS:
+            par = getattr(target.par, par_name, None)
+            if par is None:
+                continue
+            try:
+                if par.eval() != par.default:
+                    saved_prefs.append((par, par.val))
+                    par.val = par.default
+            except Exception as e:
+                self.Log(f"Could not reset {par_name} for export: {e}",
+                         "WARNING")
+
         # Phase 3: Save the .tox.
         success = False
         try:
@@ -3537,6 +3561,14 @@ class EmbodyExt:
             except Exception as e:
                 self.Log(
                     f"Failed to restore {entry['op'].path}: {e}", "WARNING")
+
+        # Restore ship-default preference params (always -- the dev machine
+        # keeps its own preference; only the exported .tox shipped the default).
+        for par, value in saved_prefs:
+            try:
+                par.val = value
+            except Exception as e:
+                self.Log(f"Failed to restore pref {par.name}: {e}", "WARNING")
 
         # Restore Embody tags (always, even on save failure).
         for op_ref, tags_to_restore in saved_tags:

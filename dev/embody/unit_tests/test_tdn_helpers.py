@@ -508,3 +508,55 @@ class TestTDNHelpers(EmbodyTestCase):
         finally:
             restore()
             self._resetLockedWarnState()
+
+
+class TestTDNStorageSkipList(EmbodyTestCase):
+    """Runtime storage keys must never serialize into a committed .tdn.
+
+    Ported from upstream v6.0.160's storage-skip-list hardening. Periodic
+    watchdog/liveness counters (_watchdog_gen / _clip_watch_gen /
+    _shortcut_rec_gen) tick every few seconds, so before this guard every save
+    baked a fresh value into Embody.tdn and churned the file; startup/restore
+    flags leaked the same way.
+    """
+
+    # Keys confirmed leaking into the committed Embody.tdn before the fix.
+    RUNTIME_KEYS = (
+        '_watchdog_gen', '_clip_watch_gen', '_shortcut_rec_gen',
+        'claudius_running', '_tdn_restore_failures', '_start_in_progress',
+        '_test_saved_status', '_smoke_test_responses',
+    )
+
+    def setUp(self):
+        super().setUp()
+        self.tdn = self.embody.ext.TDN
+
+    def test_runtime_keys_are_in_skip_list(self):
+        mod = self.embody.op('TDNExt').module
+        for key in self.RUNTIME_KEYS:
+            self.assertIn(key, mod.SKIP_STORAGE_KEYS,
+                          f'{key} must be in SKIP_STORAGE_KEYS or it churns '
+                          f'/ leaks into every committed .tdn')
+
+    def test_exportStorage_excludes_runtime_keys(self):
+        # Stamp every runtime key on the sandbox, then confirm none survive
+        # the export -- the real path a save takes.
+        for i, key in enumerate(self.RUNTIME_KEYS):
+            self.sandbox.store(key, i + 1)
+        try:
+            exported = self.tdn._exportStorage(self.sandbox)
+            leaked = [k for k in self.RUNTIME_KEYS if k in exported]
+            self.assertEqual(leaked, [],
+                             f'runtime keys leaked into export: {leaked}')
+        finally:
+            for key in self.RUNTIME_KEYS:
+                self.sandbox.unstore(key)
+
+    def test_normal_key_still_exports(self):
+        # Guard: the skip list does not swallow ordinary authored storage.
+        self.sandbox.store('my_real_setting', {'a': 1})
+        try:
+            exported = self.tdn._exportStorage(self.sandbox)
+            self.assertIn('my_real_setting', exported)
+        finally:
+            self.sandbox.unstore('my_real_setting')

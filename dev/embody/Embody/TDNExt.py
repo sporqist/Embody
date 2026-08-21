@@ -205,6 +205,20 @@ SKIP_STORAGE_KEYS = {
 	# into Embody.tdn, and a TDN restore would then suppress dialogs for the
 	# whole session (observed on the v6.0.140 save, caught pre-commit).
 	'_suppress_dialogs',
+	# Periodic watchdog/liveness counters -- pure runtime state that ticks
+	# every few seconds, so every save baked a fresh value into Embody.tdn and
+	# churned the file (verified leaking: _watchdog_gen / _clip_watch_gen /
+	# _shortcut_rec_gen appeared and moved on every save diff). Ported from
+	# upstream v6.0.160's storage-skip-list hardening.
+	'_watchdog_gen', '_clip_watch_gen', '_shortcut_rec_gen',
+	'claudius_running',
+	# Startup / restore runtime state -- regenerated fresh every session, so
+	# committing it is meaningless and (for _start_in_progress) could confuse a
+	# restore that reads it back mid-reconstruction.
+	'_tdn_restore_failures', '_start_in_progress',
+	# Test-runner runtime state. Normally cleared before a save, but a save
+	# during a test run (or an interrupted run) could otherwise bake it in.
+	'_test_saved_status', '_smoke_test_responses',
 }
 _SYSTEM_PATH_PREFIXES = tuple(p + '/' for p in SYSTEM_PATHS)
 
@@ -3271,12 +3285,21 @@ class TDNExt:
 		Array position = input index. Entries are source operator names
 		(sibling) or full paths (cross-network). Null entries for gaps.
 		Example: ['noise1'] or ['noise1', null, 'level1']
+
+		Enumerates inputConnectors (POSITIONAL) rather than OP.inputs, which is
+		COMPACTED -- a wire on input 1 with input 0 empty appears at index 0 in
+		OP.inputs, so the old enumerate collapsed it onto input 0 on reimport
+		(verified: a crossTOP's right-only input silently moved to the left).
+		The importer already wires by array position (_wireConnectionList sets
+		dest_index = i and skips nulls), so fixing the export completes the
+		round-trip. Ported from upstream v6.0.241.
 		"""
-		inputs = []
-		max_index = -1
 		conn_map = {}
-		for i, inp in enumerate(target.inputs):
-			if inp is not None:
+		max_index = -1
+		for i, connector in enumerate(target.inputConnectors):
+			cons = connector.connections
+			if cons:
+				inp = cons[0].owner
 				# Use sibling name if same parent, otherwise full path
 				if inp.parent() == target.parent():
 					conn_map[i] = inp.name
@@ -3288,10 +3311,7 @@ class TDNExt:
 			return []
 
 		# Build array with nulls for gaps
-		for i in range(max_index + 1):
-			inputs.append(conn_map.get(i))
-
-		return inputs
+		return [conn_map.get(i) for i in range(max_index + 1)]
 
 	def _exportCompConnections(self, target):
 		"""Export COMP (top/bottom) input connections as a string array."""

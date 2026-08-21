@@ -173,3 +173,53 @@ class TestTDNExternalConnections(EmbodyTestCase):
 		self.embody.ext.Embody.StripCompChildren(base)
 		self.assertEqual(
 			base.fetch('_tdn_external_wires', [], search=False), [])
+
+
+class TestTDNSparseInputConnections(EmbodyTestCase):
+	"""A wire on a non-zero input index must keep that index across a TDN
+	round-trip. OP.inputs is COMPACTED, so a wire on input 1 (input 0 empty)
+	reads as index 0 there -- the old exporter collapsed it onto input 0 (a
+	crossTOP's right input silently moved to the left). Ported from upstream
+	v6.0.241; the exporter now enumerates positional inputConnectors."""
+
+	def setUp(self):
+		super().setUp()
+		self.tdn = self.embody.ext.TDN
+
+	def test_export_preserves_gap_before_wire(self):
+		box = self.sandbox.create(baseCOMP, 'sparse_box')
+		src = box.create(noiseTOP, 'src')
+		x = box.create(crossTOP, 'x')
+		# Wire src -> input index 1, leaving input 0 empty.
+		src.outputConnectors[0].connect(x.inputConnectors[1])
+		exported = self.tdn._exportConnections(x)
+		self.assertEqual(exported, [None, 'src'],
+			'a wire on input 1 must export as [null, "src"], not ["src"]')
+
+	def test_roundtrip_keeps_wire_on_input_1(self):
+		box = self.sandbox.create(baseCOMP, 'sparse_rt')
+		src = box.create(noiseTOP, 'src')
+		x = box.create(crossTOP, 'x')
+		src.outputConnectors[0].connect(x.inputConnectors[1])
+
+		result = self.tdn.ExportNetwork(root_path=box.path)
+		self.assertTrue(result.get('success'))
+		dest = self.sandbox.create(baseCOMP, 'sparse_dest')
+		self.tdn.ImportNetwork(dest.path, result['tdn'], clear_first=True)
+
+		dx = dest.op('x')
+		self.assertIsNotNone(dx)
+		self.assertEqual(len(dx.inputConnectors[0].connections), 0,
+			'input 0 must stay empty')
+		self.assertEqual(len(dx.inputConnectors[1].connections), 1,
+			'the wire must land back on input 1, not collapse to input 0')
+
+	def test_contiguous_inputs_still_export(self):
+		# Regression guard: the common (no-gap) case is unchanged.
+		box = self.sandbox.create(baseCOMP, 'contig')
+		a = box.create(noiseTOP, 'a')
+		b = box.create(noiseTOP, 'b')
+		x = box.create(crossTOP, 'x')
+		a.outputConnectors[0].connect(x.inputConnectors[0])
+		b.outputConnectors[0].connect(x.inputConnectors[1])
+		self.assertEqual(self.tdn._exportConnections(x), ['a', 'b'])

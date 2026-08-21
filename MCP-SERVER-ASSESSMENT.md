@@ -130,6 +130,25 @@ interleaved between the real ones. This failed silently and far from the cause:
 
 **Ask:** strip empty rows on TDN import, or round-trip table DATs losslessly.
 
+> **Correction (verified 2026-08-21, Embody 6.0.141+cm.4, TD 2025.33070).** This
+> does not reproduce through any Embody path, and the earlier "root cause"
+> (`\r\r\n` doubled terminators from `oper.save()`) was wrong. Tested directly:
+> `oper.save()` on a DAT whose text holds CRLF writes clean CRLF, never `\r\r\n`;
+> a file that DOES contain `\r\r\n` loads into a table DAT (via syncfile) as
+> clean rows with no blanks; a table whose text is set with `\r\r\n` parses to
+> clean rows; and a table cell containing a bare `\r` survives a full TDN
+> export -> import losslessly (`x\ry` in, `x\ry` out), no blank rows. TD 2025 is
+> robust to `\r` / `\r\r\n` on read, write, syncfile, and TDN round-trip. An
+> upstream survey to v6.0.259 also found no commit targeting this symptom.
+>
+> So no fix ships: a speculative "strip empty rows on import" guard would
+> silently corrupt a table that legitimately has an empty row, which is worse
+> than the unreproduced symptom. The blank rows in the original project came
+> from a mechanism outside Embody's serialization -- most likely the project's
+> own data-fetch/parse code, or a TD build difference. If it recurs, capture
+> the exact `.tdn` (or the file the DAT was syncing) plus the operator pipeline
+> that fed the table, so the real trigger can be reproduced rather than guessed.
+
 ### 2.4 Parameter mode silently reverting EXPRESSION -> CONSTANT
 
 I set `Orbitradius` to an expression, verified it evaluated correctly, and later

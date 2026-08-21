@@ -417,3 +417,53 @@ class TestCodeModeRealFrames(EmbodyTestCase):
         state = sys._envoy_codemode_defer
         self.assertIsNotNone(state)
         self.assertLessEqual(state['total'], 300)
+
+
+class TestCodeModeInertExecuteLint(EmbodyTestCase):
+    """Field report 6b.2: a Parameter Execute DAT whose watch target is the
+    COMP it lives in is inert (TD recursion guard) and fires nothing, with no
+    error. code_mode's settle diagnostics now surface it as a warning."""
+
+    def setUp(self):
+        super().setUp()
+        self.envoy = self.embody.ext.Envoy
+        self.cm = self.embody.op('envoy_codemode').module
+
+    def test_self_watching_parexec_warns(self):
+        box = self.sandbox.create(baseCOMP, 'inert_host')
+        pex = box.create(parameterexecuteDAT, 'watcher')
+        pex.par.op = box            # watches its own parent -> inert
+        pex.par.active = True
+        warns = self.cm._inertExecuteWarnings([box])
+        self.assertEqual(len(warns), 1, repr(warns))
+        self.assertEqual(warns[0]['nodePath'], pex.path)
+        self.assertIn('own parent', warns[0]['message'])
+        self.assertEqual(warns[0]['source'], 'lint')
+
+    def test_parexec_watching_other_op_is_ok(self):
+        box = self.sandbox.create(baseCOMP, 'ok_host')
+        other = box.create(nullCHOP, 'target')
+        pex = box.create(parameterexecuteDAT, 'watcher')
+        pex.par.op = other          # watches a different op -> fine
+        pex.par.active = True
+        self.assertEqual(self.cm._inertExecuteWarnings([box]), [])
+
+    def test_inactive_parexec_not_warned(self):
+        box = self.sandbox.create(baseCOMP, 'inactive_host')
+        pex = box.create(parameterexecuteDAT, 'watcher')
+        pex.par.op = box
+        pex.par.active = False      # inactive -> not a live inert callback
+        self.assertEqual(self.cm._inertExecuteWarnings([box]), [])
+
+    def test_lint_surfaces_through_code_mode(self):
+        code = (
+            "b = tk.make('baseCOMP', 'lint_host', parent={sb!r})\n"
+            "d = tk.make('parameterexecuteDAT', 'w', parent=b)\n"
+            "d.par.op = b\n"
+            "d.par.active = True\n"
+        ).format(sb=self.sandbox.path)
+        result = self.envoy._code_mode(code=code)
+        self.assertTrue(result['success'], result.get('error', ''))
+        msgs = [w['message'] for w in result['diagnostics']['warnings']]
+        self.assertTrue(any('own parent' in m for m in msgs),
+                        f'inert-parexec warning missing: {msgs}')

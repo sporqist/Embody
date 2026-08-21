@@ -180,3 +180,32 @@ class TestDescribe(EmbodyTestCase):
         r = self.envoy._describe('nonsense')
         self.assertIn('error', r)
         self.assertIn('unknown mode', r['error'])
+
+
+class TestDescribeSequenceAccess(EmbodyTestCase):
+    """Field report 6b.1: sequence pages are 0-indexed (vec0name, ...) and
+    describe(node, full) must SPELL OUT the enumeration so an agent reads the
+    origin instead of guessing it."""
+
+    def setUp(self):
+        super().setUp()
+        self.envoy = self.embody.ext.Envoy
+
+    def test_sequence_access_hint_is_zero_indexed(self):
+        box = self.sandbox.create(baseCOMP, 'seq_host')
+        g = box.create(glslmultiTOP, 'shader')
+        g.seq.vec.numBlocks = 2
+        g.seq.vec[0].par.name = 'uAlt'
+        g.seq.vec[1].par.name = 'uTime'
+
+        d = self.envoy._describe('node', g.path, full=True)
+        seqs = {s['sequence']: s for s in (d.get('sequences') or [])}
+        self.assertIn('vec', seqs, 'populated vec sequence must be described')
+        vec = seqs['vec']
+        self.assertEqual(vec['numBlocks'], 2)
+        self.assertIn('0-indexed', vec['access'])
+        self.assertIn('op.seq.vec[i]', vec['access'])
+        # Blocks enumerate from 0, carrying the authored names.
+        self.assertEqual(vec['blocks'][0]['index'], 0)
+        self.assertEqual(vec['blocks'][0]['pars'].get('name'), 'uAlt')
+        self.assertEqual(vec['blocks'][1]['index'], 1)

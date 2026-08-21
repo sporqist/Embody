@@ -424,10 +424,60 @@ class _Toolkit:
 # Diagnostics -- consolidated errors + warnings + GLSL compile logs
 # =============================================================================
 
+def _inertExecuteWarnings(targets, recurse=True):
+    """Lint: a Parameter Execute DAT whose watch target IS the COMP it lives
+    in is INERT -- TD suppresses it (recursion guard, since the callback often
+    writes into that same COMP), so its callbacks never fire. There is no
+    error, no cook warning; it silently does nothing. Verified on TD
+    2025.33070. Surface it as a warning the moment code_mode builds such a DAT,
+    so an agent does not spend a build-and-abandon cycle wondering why (field
+    report 6b.2).
+    """
+    warnings = []
+    seen = set()
+    candidates = []
+    for oper in targets:
+        if not getattr(oper, 'valid', False):
+            continue
+        candidates.append(oper)
+        if recurse and hasattr(oper, 'findChildren'):
+            try:
+                candidates.extend(oper.findChildren(type=parameterexecuteDAT))
+            except Exception:
+                pass
+    for d in candidates:
+        try:
+            if d.OPType != 'parameterexecuteDAT':
+                continue
+            if not d.par.active.eval():
+                continue
+            watched = d.par.op.eval()
+            if not watched:
+                continue
+            w = op(watched)
+            if w is not None and w is d.parent() and d.path not in seen:
+                seen.add(d.path)
+                warnings.append({
+                    'nodePath': d.path, 'nodeName': d.name,
+                    'opType': 'parameterexecuteDAT',
+                    'message': (
+                        "watches its own parent COMP -- a Parameter Execute "
+                        "DAT is inert when its `op` is the COMP it lives in "
+                        "(TD's recursion guard), so its callbacks never fire. "
+                        "Point `op` at a different operator, or move the DAT "
+                        "outside the COMP it watches."),
+                    'source': 'lint',
+                })
+        except Exception:
+            pass
+    return warnings
+
+
 def _collectDiagnostics(ext, targets, recurse=True):
     """Merge op errors/warnings (via the proven get_op_errors parser) across
     every target, deduped, and append GLSL shader-compile diagnostics scraped
-    from a temporary Info DAT. Never raises.
+    from a temporary Info DAT, plus a lint for inert self-watching Parameter
+    Execute DATs. Never raises.
 
     Returns {errorCount, warningCount, errors, warnings} with each entry
     {nodePath, nodeName, opType, message, source}.
@@ -468,6 +518,13 @@ def _collectDiagnostics(ext, targets, recurse=True):
             if key not in seen_err:
                 seen_err.add(key)
                 errors.append(entry)
+
+    # Lint: inert self-watching Parameter Execute DATs (field report 6b.2).
+    for entry in _inertExecuteWarnings(targets, recurse):
+        key = (entry.get('nodePath'), entry.get('message'))
+        if key not in seen_warn:
+            seen_warn.add(key)
+            warnings.append(entry)
 
     return {
         'errorCount': len(errors),
@@ -1059,8 +1116,15 @@ def _describeSequences(o):
             while blocks and not blocks[-1]['pars']:
                 blocks.pop()
             if blocks:
+                n = len(s.blocks)
                 out.append({'sequence': s.name,
-                            'numBlocks': len(s.blocks),
+                            'numBlocks': n,
+                            # Every sequence page is 0-INDEXED (vec0name,
+                            # sampler0name, ...). Spell out the enumeration so
+                            # an agent reads the origin instead of guessing it
+                            # (field report 6b.1).
+                            'access': f'op.seq.{s.name}[i] for i in '
+                                      f'0..{n - 1}  (0-indexed)',
                             'blocks': blocks})
         except Exception:
             pass

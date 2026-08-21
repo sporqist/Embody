@@ -69,6 +69,7 @@ class _Toolkit:
         self._externalized = []  # {path, ...} auto/explicitly externalized
         self._report = None     # structured return channel payload
         self._reported = False
+        self._after_frames = None  # callback to run AFTER real frames advance
 
     # ---- helpers -------------------------------------------------------------
 
@@ -386,6 +387,38 @@ class _Toolkit:
         self._reported = True
         return obj
 
+    def after_frames(self, fn):
+        """Register a zero-arg callback to run AFTER real frames have advanced.
+
+        This is the read-after-write fix. code_mode's auto-settle is a
+        synchronous force-cook -- it CANNOT make a callback fire, a Movie File
+        In reload land, or a feedback loop evolve, because those need real
+        frames to pass. So a read in the SAME code block after such a write
+        gets stale data (a previous texture, an unchanged table, a callback
+        that "didn't run") -- and the stale value is always plausible, so it
+        sends you debugging the wrong thing.
+
+        Call code_mode with `real_frames=N`, do the WRITE in the main body,
+        and put the READ in an after_frames callback -- it runs once N real
+        frames have passed, and whatever it tk.report()s (or returns) is the
+        response:
+
+            top.par.file = 'new.png'          # the write
+            def read_back():
+                tk.report({'mean': float(top.numpyArray().mean())})
+            tk.after_frames(read_back)         # runs after real_frames pass
+
+        Without real_frames the callback is inert (it still runs, right after
+        the force-cook settle, but no real frame has advanced -- so use
+        real_frames whenever the callback depends on one). Last registration
+        wins. The callback's return value is recorded as `after_frames_return`
+        when it does not tk.report() itself.
+        """
+        if not callable(fn):
+            raise TypeError('tk.after_frames(fn): fn must be callable')
+        self._after_frames = fn
+        return fn
+
 
 # =============================================================================
 # Diagnostics -- consolidated errors + warnings + GLSL compile logs
@@ -557,29 +590,15 @@ def _makeSafe(value, _depth=0):
     return str(value)
 
 
-def code_mode(ext, code, settle_frames=10):
-    """Execute Python live in TD with the `tk` namespace, auto-settle, and
-    return consolidated diagnostics.
+# Real-frame safety cap: read-after-write needs 1-5 frames; this only bounds a
+# runaway so a deferred code_mode can never pin TD's main thread indefinitely.
+_CM_MAX_REAL_FRAMES = 300  # ~5s at 60fps
+_UNSET = object()          # "no after_frames return" sentinel (None is a value)
 
-    Args:
-        code:          Python source to exec on the main thread.
-        settle_frames: Cook iterations for the auto-settle after the code runs
-                       (default 10, 0 to skip). Also the default for
-                       tk.settle().
 
-    Returns a consolidated dict:
-        success, stdout, report, diagnostics {errorCount, warningCount,
-        errors, warnings}, created (paths), settled_frames, elapsed_ms.
-        On an exception: success=False plus error + traceback (tail); stdout,
-        created, and diagnostics still ride along so the model can fix forward
-        (code_mode does NOT roll back created ops -- tk.make auto-positions, so
-        there is no (0,0) pileup, and the partial state is the evidence).
-    """
-    preview = code[:200] + ('...' if len(code) > 200 else '')
-    ext._log(f'code_mode: {preview}')
-
-    tk = _Toolkit(ext)
-    # Fresh globals every call. Native td + op classes are the substrate.
+def _cm_make_namespace(ext, tk):
+    """Fresh code_mode globals. Native td + op classes are the substrate, so TD
+    is fully usable inside code_mode exactly as in a real DAT."""
     namespace = {
         'op': op,
         'ops': ops,
@@ -588,8 +607,6 @@ def code_mode(ext, code, settle_frames=10):
         'me': ext.ownerComp,
         'tk': tk,
     }
-    # Inject the td module contents (operator type names, TD classes, tdu, ...)
-    # so native TD is fully usable inside code_mode, matching a real DAT.
     try:
         import td as _td
         namespace['td'] = _td
@@ -598,21 +615,13 @@ def code_mode(ext, code, settle_frames=10):
                 namespace.setdefault(name, getattr(_td, name))
     except Exception:
         pass
+    return namespace
 
-    stdout = io.StringIO()
-    t0 = time.perf_counter()
-    error = None
-    tb = None
-    try:
-        with contextlib.redirect_stdout(stdout):
-            exec(code, namespace)
-    except Exception as e:
-        error = f'{type(e).__name__}: {e}'
-        tb = traceback.format_exc()
-        ext._log(f'code_mode failed: {error}', 'ERROR')
 
-    # Auto-settle: force-cook the touched ops, collect diagnostics. Runs even
-    # on error so the model sees what the partial code produced.
+def _cm_finalize(ext, tk, settle_frames, stdout_str, error, tb, t0,
+                 after_return=_UNSET, real_frames=None):
+    """Auto-settle, collect diagnostics, feed Embody's autosave, and build the
+    consolidated result dict. Shared by the synchronous and deferred paths."""
     settled = max(0, int(settle_frames))
     try:
         diagnostics = tk.settle(frames=settled)
@@ -636,13 +645,18 @@ def code_mode(ext, code, settle_frames=10):
     elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
     result = {
         'success': error is None,
-        'stdout': stdout.getvalue(),
+        'stdout': stdout_str,
         'report': _makeSafe(tk._report) if tk._reported else None,
         'diagnostics': diagnostics,
         'created': list(tk._created),
         'settled_frames': settled,
         'elapsed_ms': elapsed_ms,
     }
+    if real_frames is not None:
+        result['real_frames'] = real_frames
+    # Surface a bare (non-report) after_frames return so the read is never lost.
+    if after_return is not _UNSET and not tk._reported:
+        result['after_frames_return'] = _makeSafe(after_return)
     if tk._externalized:
         result['externalized'] = tk._externalized
     if error is not None:
@@ -650,9 +664,165 @@ def code_mode(ext, code, settle_frames=10):
         if tb:
             # Tail only -- the head is exec() plumbing.
             result['traceback'] = tb[-1500:]
+    return result
+
+
+def code_mode(ext, code, settle_frames=10):
+    """Execute Python live in TD with the `tk` namespace, auto-settle, and
+    return consolidated diagnostics.
+
+    Args:
+        code:          Python source to exec on the main thread.
+        settle_frames: Cook iterations for the auto-settle after the code runs
+                       (default 10, 0 to skip). Also the default for
+                       tk.settle().
+
+    Returns a consolidated dict:
+        success, stdout, report, diagnostics {errorCount, warningCount,
+        errors, warnings}, created (paths), settled_frames, elapsed_ms.
+        On an exception: success=False plus error + traceback (tail); stdout,
+        created, and diagnostics still ride along so the model can fix forward
+        (code_mode does NOT roll back created ops -- tk.make auto-positions, so
+        there is no (0,0) pileup, and the partial state is the evidence).
+
+    The auto-settle is a SYNCHRONOUS force-cook -- it catches compile/cook-time
+    diagnostics but cannot advance real frames. For a read that needs real
+    frames to become valid (a callback firing, a Movie File In reload landing,
+    a feedback loop evolving), use the `real_frames` argument on the tool plus
+    tk.after_frames() -- that path defers the response across real frames. See
+    cm_begin / cm_advance and tk.after_frames.
+    """
+    preview = code[:200] + ('...' if len(code) > 200 else '')
+    ext._log(f'code_mode: {preview}')
+
+    tk = _Toolkit(ext)
+    namespace = _cm_make_namespace(ext, tk)
+
+    stdout = io.StringIO()
+    t0 = time.perf_counter()
+    error = None
+    tb = None
+    try:
+        with contextlib.redirect_stdout(stdout):
+            exec(code, namespace)
+    except Exception as e:
+        error = f'{type(e).__name__}: {e}'
+        tb = traceback.format_exc()
+        ext._log(f'code_mode failed: {error}', 'ERROR')
+
+    # A registered after_frames callback still runs in the synchronous path
+    # (post-exec, pre-settle so the settle catches whatever it cooks) -- so it
+    # is never silently dropped -- but no real frame has advanced, so it only
+    # helps reads that the force-cook alone makes valid. Pass real_frames to
+    # advance real frames first.
+    after_return = _UNSET
+    if error is None and tk._after_frames is not None:
+        try:
+            with contextlib.redirect_stdout(stdout):
+                after_return = tk._after_frames()
+        except Exception as e:
+            error = f'{type(e).__name__}: {e}'
+            tb = traceback.format_exc()
+            ext._log(f'code_mode after_frames failed: {error}', 'ERROR')
+
+    result = _cm_finalize(ext, tk, settle_frames, stdout.getvalue(),
+                          error, tb, t0, after_return=after_return)
     if error is None:
         ext._log('code_mode: completed successfully')
     return result
+
+
+# --- real-frame deferred path ------------------------------------------------
+# The read-after-write fix. Mirrors the run_tests deferral: the worker thread
+# blocks on a dedicated Event (sys._envoy_pending_codemode), the main thread
+# execs the code, advances `real_frames` REAL frames via a run(delayFrames=1)
+# chain (driven from EnvoyExt so `run` resolves reliably), then runs the
+# tk.after_frames() read-back and delivers the settled result through the Event.
+
+def _cm_deliver(pending, result):
+    """Hand the finished result to the waiting worker and clear deferred state."""
+    if pending is not None:
+        pending['holder']['result'] = result
+        pending['event'].set()
+    sys._envoy_pending_codemode = None
+    sys._envoy_codemode_defer = None
+
+
+def cm_begin(ext, code, settle_frames, real_frames):
+    """Phase 1 of a real-frame code_mode: exec the code and stash state for the
+    frame-advance chain. Returns True if deferral is underway (the caller must
+    schedule the first tick via EnvoyExt), or False if a result was already
+    delivered through the worker's Event (exec failed -- no frames needed, or
+    the pending state was missing). Main-thread only."""
+    pending = getattr(sys, '_envoy_pending_codemode', None)
+    preview = code[:200] + ('...' if len(code) > 200 else '')
+    ext._log(f'code_mode[real_frames={real_frames}]: {preview}')
+
+    tk = _Toolkit(ext)
+    namespace = _cm_make_namespace(ext, tk)
+    stdout = io.StringIO()
+    t0 = time.perf_counter()
+    error = None
+    tb = None
+    try:
+        with contextlib.redirect_stdout(stdout):
+            exec(code, namespace)
+    except Exception as e:
+        error = f'{type(e).__name__}: {e}'
+        tb = traceback.format_exc()
+        ext._log(f'code_mode failed: {error}', 'ERROR')
+
+    if error is not None:
+        # exec failed -- the after_frames read would not run; deliver now
+        # rather than burning real frames on a dead call.
+        result = _cm_finalize(ext, tk, settle_frames, stdout.getvalue(),
+                              error, tb, t0, real_frames=0)
+        _cm_deliver(pending, result)
+        return False
+
+    frames = max(1, min(int(real_frames), _CM_MAX_REAL_FRAMES))
+    sys._envoy_codemode_defer = {
+        'tk': tk, 'stdout': stdout, 't0': t0,
+        'error': error, 'tb': tb,
+        'settle_frames': settle_frames,
+        'remaining': frames, 'total': frames,
+    }
+    return True
+
+
+def cm_advance(ext):
+    """One real-frame tick of a deferred code_mode. Returns True if more frames
+    remain (the caller reschedules), False once the result has been delivered
+    (or the deferred state was lost to an extension reinit, in which case the
+    worker falls back to its timeout). Main-thread only."""
+    state = getattr(sys, '_envoy_codemode_defer', None)
+    if state is None:
+        return False
+    state['remaining'] -= 1
+    if state['remaining'] > 0:
+        return True
+
+    # Final frame reached: run the read-back callback (the point of the whole
+    # exercise), then settle + deliver.
+    tk = state['tk']
+    stdout = state['stdout']
+    error = state['error']
+    tb = state['tb']
+    after_return = _UNSET
+    if error is None and tk._after_frames is not None:
+        try:
+            with contextlib.redirect_stdout(stdout):
+                after_return = tk._after_frames()
+        except Exception as e:
+            error = f'{type(e).__name__}: {e}'
+            tb = traceback.format_exc()
+            ext._log(f'code_mode after_frames failed: {error}', 'ERROR')
+
+    result = _cm_finalize(ext, tk, state['settle_frames'], stdout.getvalue(),
+                          error, tb, state['t0'],
+                          after_return=after_return, real_frames=state['total'])
+    _cm_deliver(getattr(sys, '_envoy_pending_codemode', None), result)
+    return False
 
 
 # =============================================================================
@@ -669,7 +839,7 @@ def code_mode(ext, code, settle_frames=10):
 _DESCRIBE_MODES = ('contract', 'node', 'network', 'docs')
 
 _CONTRACT_HELPERS = ('make', 'wire', 'layout', 'setp', 'find', 'externalize',
-                     'settle', 'errors', 'checkpoint', 'report')
+                     'settle', 'errors', 'checkpoint', 'report', 'after_frames')
 
 
 def describe(ext, mode, target=None, depth=1, dump=False, full=False):
@@ -738,6 +908,13 @@ def _describeContract(ext):
             'earlier.',
             'Return data with tk.report(obj); it rides back separate from '
             'stdout.',
+            'READ-AFTER-WRITE: the auto-settle is a force-cook and cannot '
+            'advance real frames. When a read needs real frames to become '
+            'valid (a callback firing, a Movie File In reload landing, a '
+            'feedback loop evolving), call code_mode with real_frames=N, do '
+            'the WRITE in the body, and put the READ in a tk.after_frames() '
+            'callback -- the call defers across N real frames, then runs the '
+            'callback and returns its tk.report(). Keep N small (1-5).',
         ],
     }
 

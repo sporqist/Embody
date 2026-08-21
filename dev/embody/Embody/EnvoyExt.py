@@ -795,7 +795,8 @@ class EnvoyMCPServer:
             return self._execute_in_td('execute_python', {'code': code})
 
         @self.mcp.tool()
-        def code_mode(code: str, settle_frames: int = 10) -> dict:
+        def code_mode(code: str, settle_frames: int = 10,
+                      real_frames: int = 0) -> dict:
             """
             Execute Python live in TouchDesigner with the `tk` helper namespace,
             auto-settle a few cook frames, and return CONSOLIDATED diagnostics
@@ -823,14 +824,40 @@ class EnvoyMCPServer:
               tk.checkpoint(target) -> dict   snapshot a TDN COMP to disk.
               tk.report(obj)   return JSON-able data explicitly (separate from
                   stdout; exec() discards the last expression value).
+              tk.after_frames(fn)   register a read-back callback (see below).
 
             Fresh globals every call -- no state persists between calls; keep
             persistent state in the TD project itself.
+
+            READ-AFTER-WRITE: the auto-settle is a SYNCHRONOUS force-cook, so it
+            catches compile/cook-time errors but CANNOT advance real frames. A
+            read in the same call after a write that needs real frames -- a
+            callback firing, a Movie File In reload landing, a feedback loop
+            evolving -- gets stale data (a previous texture, an unchanged table,
+            a callback that "didn't run"), and the stale value is always
+            plausible. When a read needs real frames, set `real_frames=N`, do
+            the WRITE in the body, and put the READ in a tk.after_frames()
+            callback -- the call defers across N real frames, then runs the
+            callback and returns its tk.report():
+
+                top.par.file = 'new.png'
+                def read_back():
+                    tk.report({'mean': float(top.numpyArray().mean())})
+                tk.after_frames(read_back)
+
+            with real_frames=2. The response then also carries `real_frames`
+            (frames advanced) and, if the callback returned a value without
+            calling tk.report, `after_frames_return`.
 
             Args:
                 code:          Python source to execute on the main thread.
                 settle_frames: Cook iterations for the auto-settle after your
                     code runs (default 10, 0 to skip).
+                real_frames:   Advance this many REAL frames after your code,
+                    then run the tk.after_frames() callback, before settling
+                    and responding (default 0 = synchronous, no real frames).
+                    Use only when a read needs real time to pass; keep it small
+                    (1-5 is plenty). Capped at 300.
 
             Returns:
                 Dict with success, stdout, report (tk.report value),
@@ -839,10 +866,50 @@ class EnvoyMCPServer:
                 exception: success=False plus error + traceback, with stdout,
                 created, and diagnostics still included so you can fix forward.
             """
-            return self._execute_in_td('code_mode', {
-                'code': code,
-                'settle_frames': settle_frames,
+            # Synchronous path (unchanged): no real frames requested.
+            if not real_frames or int(real_frames) <= 0:
+                return self._execute_in_td('code_mode', {
+                    'code': code,
+                    'settle_frames': settle_frames,
+                })
+
+            # Deferred real-frame path: block the worker on a dedicated Event
+            # (like run_tests) while the main thread advances real frames and
+            # delivers the settled result. Bypasses the response_queue, so it is
+            # not bound by the 30s transport timeout.
+            cm_event = Event()
+            cm_holder: dict = {}
+            sys._envoy_pending_codemode = {
+                'event': cm_event,
+                'holder': cm_holder,
+            }
+            self.add_to_refresh_queue({
+                'id': -1,  # sentinel -- deferred, no normal response expected
+                'operation': 'code_mode',
+                'params': {
+                    'code': code,
+                    'settle_frames': settle_frames,
+                    'real_frames': real_frames,
+                },
+                'sid': _SESSION_CTX.get()[0],
             })
+
+            # Wait until the frame chain delivers, times out, or shutdown.
+            # Generous deadline: the 300-frame cap even at ~7fps is ~45s.
+            deadline = time.time() + 60.0
+            while not self.shutdown_event.is_set():
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    sys._envoy_pending_codemode = None
+                    return {'error': 'code_mode real_frames timed out '
+                                     '(the frame-advance chain did not complete '
+                                     '-- did an extension reinit interrupt it?)'}
+                if cm_event.wait(timeout=min(remaining, 1.0)):
+                    sys._envoy_pending_codemode = None
+                    return cm_holder.get('result', {
+                        'error': 'code_mode deferred completed without a result'})
+            sys._envoy_pending_codemode = None
+            return {'error': 'Server shutting down during code_mode'}
 
         @self.mcp.tool()
         def describe(mode: str, target: str = None, depth: int = 1,
@@ -5299,10 +5366,59 @@ class EnvoyExt:
                 msg += f' (rolled back {removed} operator(s) the script created before failing)'
             return {'error': msg}
 
-    def _code_mode(self, code: str, settle_frames: int = 10) -> dict:
+    def _code_mode(self, code: str, settle_frames: int = 10,
+                   real_frames: int = 0):
         """Code-mode execution: run Python with the tk namespace, auto-settle,
-        return consolidated diagnostics -- see envoy_codemode."""
+        return consolidated diagnostics -- see envoy_codemode.
+
+        With real_frames > 0 this is DEFERRED (main thread): cm_begin execs the
+        code and stashes state, then a run(delayFrames=1) chain advances real
+        frames and cm_advance runs the tk.after_frames() read-back + delivers
+        through the worker's Event. Returns None on the deferred path (like
+        run_tests) -- the sentinel request_id=-1 carries no normal response.
+        """
+        if real_frames and int(real_frames) > 0:
+            try:
+                deferring = mod.envoy_codemode.cm_begin(
+                    self, code, settle_frames, real_frames)
+            except Exception as e:
+                # Never leave the worker blocked -- deliver the error via the
+                # dedicated Event.
+                self._signalCodemodeError(f'code_mode setup failed: {e}')
+                return None
+            if deferring:
+                self._scheduleCodemodeTick()
+            return None  # deferred (cm_begin already delivered on exec error)
         return mod.envoy_codemode.code_mode(self, code, settle_frames)
+
+    def _scheduleCodemodeTick(self):
+        """Advance one real frame for a deferred code_mode. Uses the string-
+        expression run() form so a mid-chain extension reinit resolves the LIVE
+        Envoy instance rather than stranding on a stale one."""
+        run(f"op('{self.ownerComp.path}').ext.Envoy._codemodeAdvanceTick()",
+            fromOP=self.ownerComp, delayFrames=1)
+
+    def _codemodeAdvanceTick(self):
+        """One tick of a deferred code_mode's frame chain. Reschedules until the
+        frame budget is spent; cm_advance then runs the read-back + delivers."""
+        try:
+            more = mod.envoy_codemode.cm_advance(self)
+        except Exception as e:
+            self._log(f'code_mode advance failed: {e}', 'ERROR')
+            self._signalCodemodeError(f'code_mode advance failed: {e}')
+            return
+        if more:
+            self._scheduleCodemodeTick()
+
+    def _signalCodemodeError(self, message):
+        """Deliver an error to the worker waiting on a deferred code_mode and
+        clear the deferred state."""
+        pending = getattr(sys, '_envoy_pending_codemode', None)
+        if pending is not None:
+            pending['holder']['result'] = {'error': message}
+            pending['event'].set()
+        sys._envoy_pending_codemode = None
+        sys._envoy_codemode_defer = None
 
     def _describe(self, mode: str, target: str = None, depth: int = 1,
                   dump: bool = False, full: bool = False) -> dict:

@@ -293,3 +293,127 @@ class TestCodeMode(EmbodyTestCase):
         result = self.envoy._code_mode(code=code)
         self.assertTrue(result['success'], result.get('error', ''))
         self.assertFalse(result['report']['checkpointed'])
+
+
+class TestCodeModeRealFrames(EmbodyTestCase):
+    """The read-after-write fix: real_frames + tk.after_frames().
+
+    The synchronous force-cook settle cannot advance real frames, so a read
+    that depends on a callback firing / a reload landing / a loop evolving is
+    stale in the same call. real_frames defers the response across real frames.
+
+    The full deferred path (worker Event + a run(delayFrames=1) tick chain)
+    needs real frames to pass, so these tests drive the pure machinery --
+    cm_begin + a manual cm_advance loop standing in for the ticks -- against a
+    fake pending Event. That deterministically covers the countdown, the
+    callback invocation, delivery, and the error paths; the live end-to-end
+    (real frames actually advancing) is verified by hand.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.envoy = self.embody.ext.Envoy
+        self.cm = self.embody.op('envoy_codemode').module
+        self._clear_defer_state()
+
+    def tearDown(self):
+        self._clear_defer_state()
+        super().tearDown()
+
+    def _clear_defer_state(self):
+        import sys
+        sys._envoy_pending_codemode = None
+        sys._envoy_codemode_defer = None
+
+    def _fake_pending(self):
+        import threading
+        holder = {}
+        import sys
+        sys._envoy_pending_codemode = {'event': threading.Event(),
+                                       'holder': holder}
+        return holder
+
+    def _drive(self, code, settle_frames=0, real_frames=3):
+        """Run the deferred machinery to completion; return the delivered
+        result. Stands in for the EnvoyExt tick chain by calling cm_advance
+        until it reports done (no real frames pass -- mechanics only)."""
+        holder = self._fake_pending()
+        deferring = self.cm.cm_begin(self.envoy, code, settle_frames, real_frames)
+        if not deferring:
+            # exec error delivered immediately in cm_begin
+            return holder['result']
+        guard = 0
+        while self.cm.cm_advance(self.envoy):
+            guard += 1
+            self.assertLess(guard, real_frames + 5, 'cm_advance never finished')
+        return holder['result']
+
+    # --- tk.after_frames registration ----------------------------------------
+
+    def test_after_frames_rejects_non_callable(self):
+        result = self.envoy._code_mode(code='tk.after_frames(5)')
+        self.assertFalse(result['success'])
+        self.assertIn('after_frames', result.get('error', ''))
+
+    def test_after_frames_runs_in_sync_path(self):
+        # Registered without real_frames: still runs (post-settle), never
+        # silently dropped -- its report wins.
+        code = ("def rb():\n"
+                "    tk.report({'ran': True})\n"
+                "tk.after_frames(rb)\n")
+        result = self.envoy._code_mode(code=code)
+        self.assertTrue(result['success'], result.get('error', ''))
+        self.assertEqual(result['report'], {'ran': True})
+
+    # --- deferred machinery (cm_begin / cm_advance) --------------------------
+
+    def test_deferred_delivers_callback_report(self):
+        code = ("def rb():\n"
+                "    tk.report({'from_callback': 99})\n"
+                "tk.after_frames(rb)\n")
+        result = self._drive(code, real_frames=3)
+        self.assertTrue(result['success'], result.get('error', ''))
+        self.assertEqual(result['report'], {'from_callback': 99})
+        self.assertEqual(result['real_frames'], 3)
+
+    def test_deferred_countdown_matches_real_frames(self):
+        # remaining starts at N; cm_advance returns True (N-1) times then False.
+        holder = self._fake_pending()
+        self.assertTrue(self.cm.cm_begin(self.envoy, 'x = 1', 0, 3))
+        trues = 0
+        while self.cm.cm_advance(self.envoy):
+            trues += 1
+        self.assertEqual(trues, 2)  # 3 -> 2(True) -> 1(True) -> 0(False)
+        self.assertIn('result', holder)
+
+    def test_deferred_after_frames_error_captured(self):
+        code = ("def rb():\n"
+                "    raise ValueError('boom in read-back')\n"
+                "tk.after_frames(rb)\n")
+        result = self._drive(code, real_frames=2)
+        self.assertFalse(result['success'])
+        self.assertIn('boom in read-back', result.get('error', ''))
+
+    def test_deferred_exec_error_delivers_immediately(self):
+        result = self._drive('undefined_name_here', real_frames=5)
+        self.assertFalse(result['success'])
+        self.assertIn('NameError', result.get('error', ''))
+        # No frames burned on a dead call.
+        self.assertEqual(result.get('real_frames'), 0)
+
+    def test_deferred_return_value_surfaced_without_report(self):
+        # A callback that returns (not tk.report) still has its value surfaced.
+        code = ("def rb():\n"
+                "    return {'returned': 7}\n"
+                "tk.after_frames(rb)\n")
+        result = self._drive(code, real_frames=1)
+        self.assertTrue(result['success'], result.get('error', ''))
+        self.assertEqual(result.get('after_frames_return'), {'returned': 7})
+
+    def test_real_frames_capped(self):
+        import sys
+        self._fake_pending()
+        self.cm.cm_begin(self.envoy, 'x = 1', 0, 100000)
+        state = sys._envoy_codemode_defer
+        self.assertIsNotNone(state)
+        self.assertLessEqual(state['total'], 300)

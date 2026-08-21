@@ -46,6 +46,10 @@ class TestClipboardWatch(EmbodyTestCase):
         probe = self.sandbox.create(baseCOMP, 'cw_probe')
         probe.create(constantCHOP, 'c1')
         op.Embody.ext.TDN.CopyNetworkToClipboard(probe)
+        # Return the envelope string so tests drive the watcher with
+        # clipboard_str= instead of re-reading ui.clipboard, which another
+        # process can clobber between this copy and the poll.
+        return ui.clipboard
 
     def test_param_exists(self):
         # The Clipboardautopaste toggle must be a real (persisted) custom par.
@@ -56,50 +60,50 @@ class TestClipboardWatch(EmbodyTestCase):
         self.assertTrue(op.Embody.ext.TDN.ClipboardHasNetwork())
 
     def test_offswitch_no_prompt(self):
-        self._put_envelope()
+        env = self._put_envelope()
         calls = []
         op.Embody.ext.Embody._messageBox = lambda *a, **k: (calls.append(1), 1)[1]
         op.Embody.par.Clipboardautopaste = 0
         op.Embody.ext.TDN._clip_last_sig = None
-        op.Embody.ext.TDN._clipboardWatchPoll()
+        op.Embody.ext.TDN._clipboardWatchPoll(clipboard_str=env)
         self.assertEqual(len(calls), 0, 'param off -> no prompt')
 
     def test_prompts_then_debounces(self):
-        self._put_envelope()
+        env = self._put_envelope()
         calls = []
         op.Embody.ext.Embody._messageBox = lambda *a, **k: (calls.append(a[0]), 1)[1]
         op.Embody.par.Clipboardautopaste = 1
         op.Embody.ext.TDN._clip_last_sig = None
-        op.Embody.ext.TDN._clipboardWatchPoll()
+        op.Embody.ext.TDN._clipboardWatchPoll(clipboard_str=env)
         self.assertEqual(len(calls), 1, 'new envelope -> one prompt')
         self.assertIn('TDN', calls[0])
-        op.Embody.ext.TDN._clipboardWatchPoll()          # same clipboard
+        op.Embody.ext.TDN._clipboardWatchPoll(clipboard_str=env)  # same clipboard
         self.assertEqual(len(calls), 1, 'dismiss debounce -> no re-prompt')
 
     def test_non_envelope_no_prompt(self):
-        ui.clipboard = 'just some random text, not a TDN at all'
         calls = []
         op.Embody.ext.Embody._messageBox = lambda *a, **k: (calls.append(1), 1)[1]
         op.Embody.par.Clipboardautopaste = 1
         op.Embody.ext.TDN._clip_last_sig = None
-        op.Embody.ext.TDN._clipboardWatchPoll()
+        op.Embody.ext.TDN._clipboardWatchPoll(
+            clipboard_str='just some random text, not a TDN at all')
         self.assertEqual(len(calls), 0, 'non-envelope clipboard -> no prompt')
 
     def test_inactive_window_suppresses_then_prompts_on_return(self):
         # While TD is not the active window the prompt is withheld AND the clipboard
         # signature is left unrecorded, so when the user returns to TD the CURRENT
         # clipboard prompts (if they copied a different specimen, the newer one wins).
-        self._put_envelope()
+        env = self._put_envelope()
         calls = []
         op.Embody.ext.Embody._messageBox = lambda *a, **k: (calls.append(1), 1)[1]
         op.Embody.par.Clipboardautopaste = 1
         op.Embody.ext.TDN._clip_last_sig = None
         op.Embody.ext.TDN._tdWindowActive = lambda: False      # TD in the background
-        op.Embody.ext.TDN._clipboardWatchPoll()
+        op.Embody.ext.TDN._clipboardWatchPoll(clipboard_str=env)
         self.assertEqual(len(calls), 0, 'inactive window -> no prompt')
         self.assertIsNone(op.Embody.ext.TDN._clip_last_sig, 'inactive -> sig left unrecorded')
         op.Embody.ext.TDN._tdWindowActive = lambda: True       # user returns to TD
-        op.Embody.ext.TDN._clipboardWatchPoll()
+        op.Embody.ext.TDN._clipboardWatchPoll(clipboard_str=env)
         self.assertEqual(len(calls), 1, 'back in TD -> prompts the current clipboard')
 
     def test_outbound_copy_does_not_prompt(self):
@@ -109,13 +113,13 @@ class TestClipboardWatch(EmbodyTestCase):
         # just wrote, so the next poll sees no NEW (inbound) content. This is the
         # outbound-vs-inbound fix -- note the sig is left exactly as the copy set it.
         op.Embody.ext.TDN._clip_last_sig = None
-        self._put_envelope()                                   # outbound copy
+        env = self._put_envelope()                             # outbound copy
         self.assertIsNotNone(op.Embody.ext.TDN._clip_last_sig,
                              'outbound copy must seed the watcher signature')
         calls = []
         op.Embody.ext.Embody._messageBox = lambda *a, **k: (calls.append(1), 1)[1]
         op.Embody.par.Clipboardautopaste = 1
-        op.Embody.ext.TDN._clipboardWatchPoll()                # sig NOT cleared
+        op.Embody.ext.TDN._clipboardWatchPoll(clipboard_str=env)  # sig NOT cleared
         self.assertEqual(len(calls), 0,
                          'outbound copy -> watcher must not prompt to re-import')
 
@@ -130,10 +134,10 @@ class TestClipboardWatch(EmbodyTestCase):
             {'format': 'tdn', 'version': '2.0', 'network_path': '/x/foreign',
              'operators': [{'name': 'n', 'type': 'noiseTOP'}]},
             source='embody', slug='foreign')
-        ui.clipboard = m.to_clipboard_str(foreign)             # inbound -- NOT via CopyNetwork
+        foreign_str = m.to_clipboard_str(foreign)              # inbound -- NOT via CopyNetwork
         calls = []
         op.Embody.ext.Embody._messageBox = lambda *a, **k: (calls.append(a[0]), 1)[1]
         op.Embody.par.Clipboardautopaste = 1
-        op.Embody.ext.TDN._clipboardWatchPoll()
+        op.Embody.ext.TDN._clipboardWatchPoll(clipboard_str=foreign_str)
         self.assertEqual(len(calls), 1,
                          'a different (inbound) TDN after an outbound copy still prompts')

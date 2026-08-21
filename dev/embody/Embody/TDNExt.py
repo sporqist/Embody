@@ -6784,17 +6784,23 @@ class TDNExt:
 		user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
 		return int(pid.value) or None
 
-	def _clipboardWatchPoll(self) -> None:
+	def _clipboardWatchPoll(self, clipboard_str=None) -> None:
 		"""One poll: when the OS clipboard changes to a NEW Embody envelope,
 		offer (via the Embody message box, which self-suppresses during saves and
-		tests) to paste it as a new COMP in the current network."""
+		tests) to paste it as a new COMP in the current network.
+
+		clipboard_str, when provided, is used instead of reading the OS
+		clipboard -- so tests drive the watcher deterministically without
+		ui.clipboard, which any other process can clobber between the write and
+		this read."""
 		me = self.ownerComp
 		par = getattr(me.par, 'Clipboardautopaste', None)
 		if par is None or not par.eval():
 			return
 		if me.par.Performmode.eval():
 			return
-		raw = ui.clipboard or ''
+		raw = (clipboard_str if clipboard_str is not None
+			   else (ui.clipboard or ''))
 		sig = (len(raw), hash(raw))
 		if sig == self._clip_last_sig:
 			return
